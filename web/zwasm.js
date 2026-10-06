@@ -232,6 +232,32 @@ async function loadSource(source, label, size) {
   return reader;
 }
 
+async function inspectBoot() {
+  if (!state.pkg || !state.pkg.manifest.boot) {
+    log("no boot module is loaded");
+    return;
+  }
+  try {
+    const path = state.pkg.manifest.boot;
+    log("reading boot module for inspection: " + path);
+    const bytes = await state.pkg.readEntry(path);
+    const module = await WebAssembly.compile(bytes);
+    const imports = WebAssembly.Module.imports(module);
+    const exports = WebAssembly.Module.exports(module);
+    log("WASM imports: " + imports.length);
+    for (const item of imports) {
+      log("  import " + item.module + "." + item.name + " [" + item.kind + "]");
+    }
+    log("WASM exports: " + exports.length);
+    for (const item of exports.slice(0, 80)) {
+      log("  export " + item.name + " [" + item.kind + "]");
+    }
+    if (exports.length > 80) log("  … " + (exports.length - 80) + " more exports");
+  } catch (error) {
+    log("boot inspection failed: " + error.message);
+  }
+}
+
 async function openFile(file) {
   try {
     await loadSource(file, file.name, file.size);
@@ -245,6 +271,8 @@ async function openFile(file) {
 $("#pick").addEventListener("click", function () {
   $("#file").click();
 });
+
+$("#inspectBoot").addEventListener("click", inspectBoot);
 
 $("#file").addEventListener("change", function () {
   const file = $("#file").files && $("#file").files[0];
