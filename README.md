@@ -17,7 +17,7 @@ ZWASM v0.1 is a packaging/transport layer. It does not translate a PE/Windows ex
     python packager/zwasm_pack.py "C:\Games\MyGame" --boot "C:\Build\boot.wasm" --image "C:\Build\image.bin"
     python packager/zwasm_verify.py .\dist\MyGame.zgame
 
-Then open web/index.html and choose the .zgame.
+Then open web/index.html and choose the .zgame. The packager also auto-detects boot.wasm, isaac.segs.bin, and boot-trail.json when they are present at the input root.
 
 ## Package layout
 
@@ -43,7 +43,7 @@ The reference uses a segmented image (isaac.segs.bin), a WASM module (boot.wasm)
 v0.1 provides:
 
 - native .zgame packaging;
-- deterministic manifests and SHA-256 entry hashes;
+- stable manifests with SHA-256 entry hashes;
 - optional auto/forced gzip compression;
 - native-code exclusion by default;
 - package verification;
