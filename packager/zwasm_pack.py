@@ -9,6 +9,8 @@ import fnmatch
 import gzip
 import hashlib
 import json
+import shutil
+import tempfile
 from pathlib import Path, PurePosixPath
 import struct
 from typing import Iterable
@@ -24,10 +26,11 @@ NATIVE_SUFFIXES = {
     ".exp", ".ilk", ".scr", ".cpl",
 }
 SKIP_DIRS = {
-    ".git", ".hg", ".svn", "__pycache__", ".vs", ".idea",
+    ".git", ".hg", ".svn", "__pycache__", ".vs", ".idea", "dist",
     "save", "saves", "savedata", "userdata", "logs", "log",
     "tmp", "temp", "cache", "crashdumps",
 }
+SKIP_SUFFIXES = {".zgame"}
 
 
 class PackageError(RuntimeError):
@@ -50,7 +53,10 @@ def should_skip(rel: str, include_native: bool, excludes: list[str]) -> bool:
     parts = PurePosixPath(rel).parts
     if any(p.lower() in SKIP_DIRS for p in parts[:-1]):
         return True
-    if not include_native and PurePosixPath(rel).suffix.lower() in NATIVE_SUFFIXES:
+    suffix = PurePosixPath(rel).suffix.lower()
+    if suffix in SKIP_SUFFIXES:
+        return True
+    if not include_native and suffix in NATIVE_SUFFIXES:
         return True
     return any(fnmatch.fnmatch(rel, pat) for pat in excludes)
 
@@ -109,6 +115,55 @@ def resolve_role(
     return None, None
 
 
+def hash_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(8 * 1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def prepare_payload(
+    source: Path,
+    policy: str,
+    threshold: int,
+    temp_dir: Path,
+    token: int,
+) -> tuple[str, Path, int, int, str]:
+    source_size = source.stat().st_size
+    if policy == "never" or (policy == "auto" and source_size > threshold):
+        return "none", source, source_size, source_size, hash_file(source)
+
+    temp_path = temp_dir / (str(token) + ".gz")
+    raw_size = 0
+    digest = hashlib.sha256()
+
+    with source.open("rb") as src, temp_path.open("wb") as raw_out:
+        with gzip.GzipFile(
+            filename="",
+            mode="wb",
+            fileobj=raw_out,
+            compresslevel=6,
+            mtime=0,
+        ) as gz:
+            for chunk in iter(lambda: src.read(8 * 1024 * 1024), b""):
+                raw_size += len(chunk)
+                digest.update(chunk)
+                gz.write(chunk)
+
+    stored_size = temp_path.stat().st_size
+    if policy == "auto" and stored_size >= raw_size:
+        temp_path.unlink()
+        return "none", source, raw_size, raw_size, digest.hexdigest()
+
+    return "gzip", temp_path, raw_size, stored_size, digest.hexdigest()
+
+
+def copy_payload(source: Path, output) -> None:
+    with source.open("rb") as src:
+        shutil.copyfileobj(src, output, length=8 * 1024 * 1024)
+
+
 def build(args: argparse.Namespace) -> Path:
     root = Path(args.input).resolve()
     if not root.is_dir():
@@ -116,6 +171,9 @@ def build(args: argparse.Namespace) -> Path:
 
     output = Path(args.output) if args.output else default_output(root)
     output.parent.mkdir(parents=True, exist_ok=True)
+
+    if output.resolve() == root:
+        raise PackageError("output cannot be the input directory")
 
     boot_path, boot_package = resolve_role(
         root, args.boot, "boot", "boot.wasm", ("boot.wasm",)
@@ -139,101 +197,113 @@ def build(args: argparse.Namespace) -> Path:
             candidates.append((package_name, path, role))
             reserved_sources.add(path.resolve())
 
-    for package_path, p in iter_instance_files(
+    for package_path, path in iter_instance_files(
         root, args.include_native, args.exclude
     ):
-        if p.resolve() in reserved_sources:
+        if path.resolve() in reserved_sources:
             continue
-        candidates.append((package_path, p, "instance"))
+        candidates.append((package_path, path, "instance"))
 
     if not candidates:
         raise PackageError("no files selected for the package")
 
     entries: list[dict] = []
-    payloads: list[tuple[dict, bytes]] = []
 
-    for package_path, source_path, kind in candidates:
-        data = source_path.read_bytes()
-        compression, stored = choose_compression(
-            data, args.gzip, args.gzip_threshold
-        )
-        entry = {
-            "path": package_path,
-            "kind": kind,
-            "sourceName": source_path.name,
-            "offset": 0,
-            "size": len(data),
-            "storedSize": len(stored),
-            "compression": compression,
-            "sha256": sha256_bytes(data),
-            "mode": 0o644,
-        }
-        entries.append(entry)
-        payloads.append((entry, stored))
+    with tempfile.TemporaryDirectory(prefix="zwasm-") as tmp:
+        temp_dir = Path(tmp)
+        prepared: list[tuple[dict, Path]] = []
 
-    manifest = {
-        "schema": "zwasm.package/1",
-        "formatVersion": VERSION,
-        "name": root.name,
-        "createdUtc": dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat(),
-        "source": {"name": root.name, "fileCount": len(entries)},
-        "boot": boot_package,
-        "image": image_package,
-        "trail": trail_package,
-        "entries": entries,
-    }
-
-    index_blob = b""
-    payload_offset = 0
-    for _ in range(16):
-        index_blob = json.dumps(
-            manifest, ensure_ascii=False, separators=(",", ":"), sort_keys=True
-        ).encode("utf-8")
-        payload_offset = (
-            (HEADER_SIZE + len(index_blob) + PAGE_SIZE - 1) // PAGE_SIZE
-        ) * PAGE_SIZE
-
-        offset = payload_offset
-        for entry, stored in payloads:
-            entry["offset"] = offset
-            offset += len(stored)
-
-        new_blob = json.dumps(
-            manifest, ensure_ascii=False, separators=(",", ":"), sort_keys=True
-        ).encode("utf-8")
-        if new_blob == index_blob:
-            index_blob = new_blob
-            break
-        index_blob = new_blob
-    else:
-        raise PackageError("manifest index did not converge")
-
-    with output.open("wb") as f:
-        f.write(
-            HEADER.pack(
-                MAGIC,
-                VERSION,
-                0,
-                HEADER_SIZE,
-                len(index_blob),
-                payload_offset,
-                len(entries),
-                b"",
+        for token, (package_path, source_path, kind) in enumerate(candidates):
+            compression, stored_path, raw_size, stored_size, digest = prepare_payload(
+                source_path,
+                args.gzip,
+                args.gzip_threshold,
+                temp_dir,
+                token,
             )
-        )
-        f.write(index_blob)
-        f.write(b"\0" * (payload_offset - f.tell()))
-        for entry, stored in payloads:
-            if f.tell() != entry["offset"]:
-                raise PackageError(
-                    "internal offset error for "
-                    + entry["path"]
-                    + ": "
-                    + str(f.tell())
-                    + " != "
-                    + str(entry["offset"])
+            entry = {
+                "path": package_path,
+                "kind": kind,
+                "sourceName": source_path.name,
+                "offset": 0,
+                "size": raw_size,
+                "storedSize": stored_size,
+                "compression": compression,
+                "sha256": digest,
+                "mode": 0o644,
+            }
+            entries.append(entry)
+            prepared.append((entry, stored_path))
+
+        manifest = {
+            "schema": "zwasm.package/1",
+            "formatVersion": VERSION,
+            "name": root.name,
+            "createdUtc": dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat(),
+            "source": {"name": root.name, "fileCount": len(entries)},
+            "boot": boot_package,
+            "image": image_package,
+            "trail": trail_package,
+            "entries": entries,
+        }
+
+        index_blob = b""
+        payload_offset = 0
+        for _ in range(16):
+            index_blob = json.dumps(
+                manifest,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+            payload_offset = (
+                (HEADER_SIZE + len(index_blob) + PAGE_SIZE - 1) // PAGE_SIZE
+            ) * PAGE_SIZE
+
+            offset = payload_offset
+            for entry, stored_path in prepared:
+                entry["offset"] = offset
+                offset += entry["storedSize"]
+
+            new_blob = json.dumps(
+                manifest,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+            if new_blob == index_blob:
+                index_blob = new_blob
+                break
+            index_blob = new_blob
+        else:
+            raise PackageError("manifest index did not converge")
+
+        with output.open("wb") as f:
+            f.write(
+                HEADER.pack(
+                    MAGIC,
+                    VERSION,
+                    0,
+                    HEADER_SIZE,
+                    len(index_blob),
+                    payload_offset,
+                    len(entries),
+                    b"",
                 )
-            f.write(stored)
+            )
+            f.write(index_blob)
+            f.write(b"\0" * (payload_offset - f.tell()))
+            for entry, stored_path in prepared:
+                if f.tell() != entry["offset"]:
+                    raise PackageError(
+                        "internal offset error for "
+                        + entry["path"]
+                        + ": "
+                        + str(f.tell())
+                        + " != "
+                        + str(entry["offset"])
+                    )
+                copy_payload(stored_path, f)
 
     print("[ZWASM] wrote " + str(output))
     print("[ZWASM] entries: " + str(len(entries)))
@@ -241,7 +311,6 @@ def build(args: argparse.Namespace) -> Path:
     print("[ZWASM] boot:    " + (manifest["boot"] or "(none)"))
     print("[ZWASM] image:   " + (manifest["image"] or "(none)"))
     return output
-
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
