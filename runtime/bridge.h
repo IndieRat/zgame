@@ -33,6 +33,7 @@ typedef struct {
     int32_t a3;
 } zwasm_call_t;
 
+/* Stable dispatch ABI shared by runtime shims and the browser host. */
 int32_t zwasm_bridge_call(const zwasm_call_t *call);
 int32_t zwasm_bridge_last_api(void);
 int32_t zwasm_bridge_last_result(void);
