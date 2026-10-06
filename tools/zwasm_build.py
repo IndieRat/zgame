@@ -11,6 +11,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 BOOT_SOURCE = ROOT / "runtime" / "boot.c"
+BRIDGE_SOURCE = ROOT / "runtime" / "bridge.c"
 PACKER = ROOT / "packager" / "zwasm_pack.py"
 
 
@@ -35,7 +36,7 @@ def build_boot(clang: str, output: Path) -> None:
         clang, "--target=wasm32", "-O2", "-nostdlib",
         "-Wl,--no-entry", "-Wl,--export-memory",
         "-Wl,--export-table", "-Wl,--allow-undefined",
-        "-o", str(output), str(BOOT_SOURCE),
+        "-o", str(output), str(BOOT_SOURCE), str(BRIDGE_SOURCE),
     ], check=True)
 
 
