@@ -74,6 +74,7 @@ v0.2 provides:
 - local-file and HTTP loading;
 - a generated clang/wasm32 boot adapter;
 - an explicit host bridge ABI with traced unsupported calls;
+- initial Kernel32/User32/OpenGL32 bridge IDs and browser dispatch scaffolding;
 - browser implementations for basic timing and keyboard state;
 - actual WASM instantiation and host callbacks in the browser shell;
 - save checkpoints through IndexedDB;
