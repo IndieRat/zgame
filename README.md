@@ -49,7 +49,16 @@ Open web/index.html and choose the .zgame. The shell:
 
 The shell follows the useful boundary visible in the supplied TBOI web reference:
 
-    boot module -> prepared memory image -> archives/chunks -> virtual instance tree -> lazy/ranged reads -> browser host/UI
+    boot module -> prepared memory image -> archives/chunks -> virtual instance tree
+        -> bridge ABI -> browser host/UI
+
+The bridge ABI is deliberately explicit. The first host calls are:
+- KERNEL32 GetTickCount (API 1)
+- KERNEL32 Sleep (API 2)
+- USER32 GetAsyncKeyState (API 100)
+- USER32 GetKeyState (API 101)
+
+Unsupported calls return -1 and are counted/traced instead of being silently faked. This gives the eventual game runtime a concrete import-dispatch boundary that can be expanded one API at a time.
 
 The reference exposes separate module, memory-image, archive/chunk, and host stages. ZWASM keeps those concerns separate while making the package and boot contract concrete.
 
@@ -64,6 +73,8 @@ v0.2 provides:
 - package verification;
 - local-file and HTTP loading;
 - a generated clang/wasm32 boot adapter;
+- an explicit host bridge ABI with traced unsupported calls;
+- browser implementations for basic timing and keyboard state;
 - actual WASM instantiation and host callbacks in the browser shell;
 - save checkpoints through IndexedDB;
 - entry inspector, fullscreen canvas, keyboard/mouse capture, and diagnostics.
