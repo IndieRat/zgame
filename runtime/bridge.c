@@ -8,6 +8,12 @@ static volatile int32_t g_last_result;
 static volatile int32_t g_calls;
 static volatile int32_t g_unsupported;
 
+int32_t zwasm_api_call(int32_t api, int32_t a0, int32_t a1,
+                       int32_t a2, int32_t a3) {
+    zwasm_call_t call = { api, a0, a1, a2, a3 };
+    return zwasm_bridge_call(&call);
+}
+
 int32_t zwasm_bridge_call(const zwasm_call_t *call) {
     if (!call) return Z_BRIDGE_BAD_ARGUMENT;
     g_last_api = call->api;
