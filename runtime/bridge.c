@@ -8,6 +8,7 @@ static volatile int32_t g_last_result;
 static volatile int32_t g_calls;
 static volatile int32_t g_unsupported;
 
+__attribute__((export_name("zwasm_api_call")))
 int32_t zwasm_api_call(int32_t api, int32_t a0, int32_t a1,
                        int32_t a2, int32_t a3) {
     zwasm_call_t call = { api, a0, a1, a2, a3 };
@@ -24,7 +25,11 @@ int32_t zwasm_bridge_call(const zwasm_call_t *call) {
     return result;
 }
 
+__attribute__((export_name("zwasm_bridge_last_api")))
 int32_t zwasm_bridge_last_api(void) { return g_last_api; }
+__attribute__((export_name("zwasm_bridge_last_result")))
 int32_t zwasm_bridge_last_result(void) { return g_last_result; }
+__attribute__((export_name("zwasm_bridge_call_count")))
 int32_t zwasm_bridge_call_count(void) { return g_calls; }
+__attribute__((export_name("zwasm_bridge_unsupported_count")))
 int32_t zwasm_bridge_unsupported_count(void) { return g_unsupported; }
