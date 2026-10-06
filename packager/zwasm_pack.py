@@ -89,6 +89,26 @@ def default_output(input_dir: Path) -> Path:
     return Path("dist") / (stem + ".zgame")
 
 
+def resolve_role(
+    root: Path,
+    supplied: str | None,
+    role: str,
+    explicit_name: str,
+    discovered_names: tuple[str, ...],
+) -> tuple[Path | None, str | None]:
+    if supplied:
+        path = Path(supplied).resolve()
+        if not path.is_file():
+            raise PackageError(role + " file does not exist: " + str(path))
+        return path, explicit_name
+
+    for name in discovered_names:
+        path = (root / name).resolve()
+        if path.is_file():
+            return path, path.name
+    return None, None
+
+
 def build(args: argparse.Namespace) -> Path:
     root = Path(args.input).resolve()
     if not root.is_dir():
@@ -97,24 +117,32 @@ def build(args: argparse.Namespace) -> Path:
     output = Path(args.output) if args.output else default_output(root)
     output.parent.mkdir(parents=True, exist_ok=True)
 
-    candidates: list[tuple[str, Path, str]] = []
-    for role, supplied, default_name in (
-        ("boot", args.boot, "boot.wasm"),
-        ("image", args.image, "image.bin"),
-        ("trail", args.trail, "boot-trail.json"),
-    ):
-        if not supplied:
-            continue
-        p = Path(supplied).resolve()
-        if not p.is_file():
-            raise PackageError(role + " file does not exist: " + str(p))
-        candidates.append((default_name, p, role))
+    boot_path, boot_package = resolve_role(
+        root, args.boot, "boot", "boot.wasm", ("boot.wasm",)
+    )
+    image_path, image_package = resolve_role(
+        root, args.image, "image", "image.bin", ("isaac.segs.bin", "image.bin")
+    )
+    trail_path, trail_package = resolve_role(
+        root, args.trail, "trail", "boot-trail.json", ("boot-trail.json",)
+    )
 
-    seen = {p for p, _, _ in candidates}
+    candidates: list[tuple[str, Path, str]] = []
+    reserved_sources: set[Path] = set()
+
+    for path, package_name, role in (
+        (boot_path, boot_package, "boot"),
+        (image_path, image_package, "image"),
+        (trail_path, trail_package, "trail"),
+    ):
+        if path is not None and package_name is not None:
+            candidates.append((package_name, path, role))
+            reserved_sources.add(path.resolve())
+
     for package_path, p in iter_instance_files(
         root, args.include_native, args.exclude
     ):
-        if package_path in seen:
+        if p.resolve() in reserved_sources:
             continue
         candidates.append((package_path, p, "instance"))
 
@@ -149,15 +177,15 @@ def build(args: argparse.Namespace) -> Path:
         "name": root.name,
         "createdUtc": dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat(),
         "source": {"name": root.name, "fileCount": len(entries)},
-        "boot": "boot.wasm" if args.boot else None,
-        "image": "image.bin" if args.image else None,
-        "trail": "boot-trail.json" if args.trail else None,
+        "boot": boot_package,
+        "image": image_package,
+        "trail": trail_package,
         "entries": entries,
     }
 
     index_blob = b""
     payload_offset = 0
-    for _ in range(8):
+    for _ in range(16):
         index_blob = json.dumps(
             manifest, ensure_ascii=False, separators=(",", ":"), sort_keys=True
         ).encode("utf-8")
@@ -173,13 +201,12 @@ def build(args: argparse.Namespace) -> Path:
         new_blob = json.dumps(
             manifest, ensure_ascii=False, separators=(",", ":"), sort_keys=True
         ).encode("utf-8")
-        index_blob = new_blob
-        if len(new_blob) == len(
-            json.dumps(
-                manifest, ensure_ascii=False, separators=(",", ":"), sort_keys=True
-            ).encode("utf-8")
-        ):
+        if new_blob == index_blob:
+            index_blob = new_blob
             break
+        index_blob = new_blob
+    else:
+        raise PackageError("manifest index did not converge")
 
     with output.open("wb") as f:
         f.write(
