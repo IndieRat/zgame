@@ -4,50 +4,68 @@ ZWASM is a browser-oriented packaging format and loader for large prepared game 
 
 The design is intentionally different from the x86-to-WASM emulator approach in XWASM:
 
-- the package contains a browser-ready boot module when one exists;
+- the package contains a browser-ready boot module;
 - the executable memory image is a separate package entry;
 - the game filesystem is exported as lazy-readable instance entries;
 - the browser shell can load a .zgame from a file picker or over HTTP;
 - large entries are read on demand instead of requiring an eagerly materialized filesystem.
 
-ZWASM v0.1 is a packaging/transport layer. It does not translate a PE/Windows executable into WASM by itself. A browser-ready boot.wasm and prepared image can be supplied with the packager, or a package can be made as a resource-only export while the boot/runtime work is developed separately.
+## Build a .zgame
 
-## Quick start
+With LLVM/clang installed:
 
-    python packager/zwasm_pack.py "C:\Games\MyGame" --boot "C:\Build\boot.wasm" --image "C:\Build\image.bin"
-    python packager/zwasm_verify.py .\dist\MyGame.zgame
+    python tools/zwasm_build.py "C:\Games\MyGame"
 
-Then open web/index.html and choose the .zgame. The packager also auto-detects boot.wasm, isaac.segs.bin, and boot-trail.json when they are present at the input root.
+On Windows the builder automatically checks clang and the normal LLVM install path:
 
-## Package layout
+    C:\Program Files\LLVM\bin\clang.exe
 
-A .zgame file is:
+It creates .zwasm/boot.wasm, then invokes the native packager and writes dist/MyGame.zgame.
 
-1. a fixed 64-byte header;
-2. a UTF-8 JSON index;
-3. padding to a page boundary;
-4. raw or gzip-compressed file payloads.
+For a prepared image:
 
-The index contains role metadata (boot, image, instance, trail, meta) and byte offsets, so a browser can fetch only the bytes needed for a requested entry.
+    python tools/zwasm_build.py "C:\Games\Isaac" --image "C:\Build\isaac.segs.bin"
+
+An existing browser runtime can be supplied instead:
+
+    python tools/zwasm_build.py "C:\Games\Isaac" --boot "C:\Build\boot.wasm" --image "C:\Build\isaac.segs.bin"
+
+The builder does not convert a Windows .exe into a runnable WASM module. A prepared image/runtime must already exist for the actual game execution layer.
+
+## Browser shell
+
+Open web/index.html and choose the .zgame. The shell:
+
+- validates the ZWASM header/index and entry bounds;
+- lazily reads boot/image/instance entries;
+- instantiates boot.wasm with a concrete host ABI;
+- forwards keyboard input and frame callbacks;
+- renders a working browser viewport;
+- keeps lightweight save checkpoints in IndexedDB;
+- reports WASM imports/exports and runtime status;
+- works from a local file picker.
 
 ## Reference architecture
 
-The loader was designed from the supplied TBOI browser-port reference:
+The shell follows the useful boundary visible in the supplied TBOI web reference:
 
-    boot module -> prepared image -> virtual instance tree -> lazy/ranged reads -> browser host/UI
+    boot module -> prepared memory image -> archives/chunks -> virtual instance tree -> lazy/ranged reads -> browser host/UI
 
-The reference uses a segmented image (isaac.segs.bin), a WASM module (boot.wasm), an indexed instance tree, lazy reads, range probing, read-ahead, and a boot trail. ZWASM adopts those ideas at the package boundary without baking Isaac-specific behavior into the file format.
+The reference exposes separate module, memory-image, archive/chunk, and host stages. ZWASM keeps those concerns separate while making the package and boot contract concrete.
 
 ## Status
 
-v0.1 provides:
+v0.2 provides:
 
 - native .zgame packaging;
 - stable manifests with SHA-256 entry hashes;
 - optional auto/forced gzip compression;
 - native-code exclusion by default;
 - package verification;
-- local-file and HTTP loading in the HTML shell;
-- entry inspector, progress reporting, fullscreen canvas, keyboard/mouse capture, diagnostics, and drag/drop.
+- local-file and HTTP loading;
+- a generated clang/wasm32 boot adapter;
+- actual WASM instantiation and host callbacks in the browser shell;
+- save checkpoints through IndexedDB;
+- entry inspector, fullscreen canvas, keyboard/mouse capture, and diagnostics.
 
-Not yet included: a generic PE translator, an Isaac-specific WASM runtime, or a complete host ABI for an arbitrary game boot module.
+Not included yet: a generic PE translator or a complete Win32/OpenGL host ABI. Those belong in the runtime/translator layer rather than the container format.
