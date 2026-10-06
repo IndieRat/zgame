@@ -159,29 +159,65 @@ class BootRuntime {
         z_host_api: (api, a0, a1, a2, a3) => {
           state.bridge.calls++;
           state.bridge.lastApi = api | 0;
-          let result = -1; // Z_BRIDGE_UNSUPPORTED; never pretend an unimplemented API succeeded.
+          let result = -1;
           switch (api | 0) {
-            case 1: // KERNEL32 GetTickCount
-              result = Math.floor(performance.now()) >>> 0;
-              break;
-            case 2: // KERNEL32 Sleep
-              result = 0;
-              break;
-            case 100: // USER32 GetAsyncKeyState
-            case 101: { // USER32 GetKeyState
+            // KERNEL32
+            case 1: result = Math.floor(performance.now()) >>> 0; break;
+            case 2: result = 0; break;
+            case 10: result = Math.floor(performance.now() * 1000); break;
+            case 11: result = 1000000; break;
+            case 3: case 4: case 12: case 13:
+              // Allocation is owned by the eventual guest-memory bridge.
+              result = -1; break;
+
+            // USER32
+            case 100:
+            case 101: {
               const down = state.keys.has(a0 | 0);
               result = down ? 0x8000 : 0;
               break;
             }
-            default:
-              state.bridge.unsupported++;
-              log("bridge unsupported api=" + api + " args=" +
-                  [a0, a1, a2, a3].join(","));
+            case 102:
+            case 103:
+            case 104:
+            case 105:
+            case 106:
+            case 107:
+            case 108:
+            case 109:
+            case 110:
+              // Message/window objects need a guest handle table before they can be real.
+              result = -1;
               break;
+
+            // OPENGL32
+            case 200: // glGetString: pointer-backed strings require guest memory mapping.
+            case 201: // glClear
+            case 202: // glClearColor
+            case 203: // glViewport
+            case 204: // glDrawArrays
+            case 205: // glDrawElements
+            case 206: // glBindTexture
+            case 207: // glTexImage2D
+            case 208: // glTexParameteri
+            case 209: // glGenTextures
+            case 210: // glDeleteTextures
+            case 211: // context creation
+            case 212: // SwapBuffers
+              result = -1;
+              break;
+
+            default:
+              break;
+          }
+          if (result === -1) {
+            state.bridge.unsupported++;
+            log("bridge unsupported api=" + api + " args=" +
+                [a0, a1, a2, a3].join(","));
           }
           state.bridge.lastResult = result | 0;
           return result | 0;
-        },
+        }
       },
     };
     const result = await WebAssembly.instantiate(bytes, imports);
