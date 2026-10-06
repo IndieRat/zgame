@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ZWASM Game Shell</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <div class="eyebrow">ZWASM</div>
+      <h1>Game Shell</h1>
+    </div>
+    <div class="toolbar">
+      <button id="pick">Open .zgame</button>
+      <button id="fullscreen">Fullscreen</button>
+      <button id="clear" class="ghost">Clear</button>
+    </div>
+  </header>
+
+  <main>
+    <section id="dropzone" class="dropzone" tabindex="0">
+      <strong>Drop a <code>.zgame</code> here</strong>
+      <span>or use the file picker · works from file:// as well</span>
+      <input id="file" type="file" accept=".zgame,application/octet-stream" hidden>
+    </section>
+
+    <section class="grid stats">
+      <article><span>Package</span><strong id="pkgName">—</strong></article>
+      <article><span>Entries</span><strong id="pkgEntries">—</strong></article>
+      <article><span>Boot</span><strong id="pkgBoot">—</strong></article>
+      <article><span>Image</span><strong id="pkgImage">—</strong></article>
+      <article><span>Size</span><strong id="pkgSize">—</strong></article>
+      <article><span>Status</span><strong id="status">Waiting</strong></article>
+    </section>
+
+    <section class="game-card" id="gameCard">
+      <div class="card-head">
+        <div>
+          <div class="eyebrow">Viewport</div>
+          <h2 id="gameTitle">No package loaded</h2>
+        </div>
+        <div class="pill" id="runtimeState">IDLE</div>
+      </div>
+      <div class="viewport-wrap">
+        <canvas id="screen" width="960" height="544" tabindex="0" aria-label="ZWASM game viewport"></canvas>
+        <div id="overlay" class="overlay">
+          <strong>ZWASM</strong>
+          <span>Load a package to inspect or run it.</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="grid two">
+      <article class="panel">
+        <div class="card-head">
+          <div><div class="eyebrow">Package inspector</div><h2>Entries</h2></div>
+          <input id="filter" placeholder="filter paths…">
+        </div>
+        <div id="entries" class="entries"></div>
+      </article>
+
+      <article class="panel">
+        <div class="card-head">
+          <div><div class="eyebrow">Diagnostics</div><h2>Console</h2></div>
+          <button id="copyLog" class="ghost">Copy</button>
+        </div>
+        <pre id="console"></pre>
+      </article>
+    </section>
+
+    <section class="panel">
+      <div class="card-head">
+        <div><div class="eyebrow">Runtime notes</div><h2>What this shell does</h2></div>
+      </div>
+      <p class="note">
+        The shell loads the ZWASM container, verifies its header/index, reads entries lazily,
+        lists browser-ready boot/image metadata, and provides the host UI. A package is not
+        treated as a native Windows executable: a usable browser game must include a prepared
+        boot module and an accompanying host contract.
+      </p>
+    </section>
+  </main>
+
+  <script type="module" src="./zwasm.js"></script>
+</body>
+</html>
