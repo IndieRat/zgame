@@ -15,6 +15,8 @@
     <div class="toolbar">
       <button id="pick">Open .zgame</button>
       <button id="inspectBoot" class="ghost">Inspect boot</button>
+      <button id="save" class="ghost">Save</button>
+      <button id="loadSave" class="ghost">Load</button>
       <button id="fullscreen">Fullscreen</button>
       <button id="clear" class="ghost">Clear</button>
     </div>
@@ -76,10 +78,10 @@
         <div><div class="eyebrow">Runtime notes</div><h2>What this shell does</h2></div>
       </div>
       <p class="note">
-        The shell loads the ZWASM container, verifies its header/index, reads entries lazily,
-        lists browser-ready boot/image metadata, and provides the host UI. A package is not
-        treated as a native Windows executable: a usable browser game must include a prepared
-        boot module and an accompanying host contract.
+        The shell validates the ZWASM container, reads entries lazily, instantiates the
+        embedded boot.wasm module, forwards keyboard input, renders a runtime viewport,
+        and stores lightweight save checkpoints in IndexedDB. The boot adapter is a real
+        WASM module, while a full PE/Win32/OpenGL runtime remains a separate layer.
       </p>
     </section>
   </main>
