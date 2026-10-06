@@ -1,5 +1,5 @@
 const $ = (s) => document.querySelector(s);
-const state = { pkg: null, runtime: null, log: [], frame: 0 };
+const state = { pkg: null, runtime: null, log: [], frame: 0, keys: new Set(), bridge: { calls: 0, unsupported: 0, lastApi: 0, lastResult: 0 } };
 
 function log(msg) {
   const line = "[" + new Date().toLocaleTimeString() + "] " + msg;
@@ -156,6 +156,32 @@ class BootRuntime {
           log("input " + code + " " + (down ? "down" : "up"));
           return 0;
         },
+        z_host_api: (api, a0, a1, a2, a3) => {
+          state.bridge.calls++;
+          state.bridge.lastApi = api | 0;
+          let result = -1; // Z_BRIDGE_UNSUPPORTED; never pretend an unimplemented API succeeded.
+          switch (api | 0) {
+            case 1: // KERNEL32 GetTickCount
+              result = Math.floor(performance.now()) >>> 0;
+              break;
+            case 2: // KERNEL32 Sleep
+              result = 0;
+              break;
+            case 100: // USER32 GetAsyncKeyState
+            case 101: { // USER32 GetKeyState
+              const down = state.keys.has(a0 | 0);
+              result = down ? 0x8000 : 0;
+              break;
+            }
+            default:
+              state.bridge.unsupported++;
+              log("bridge unsupported api=" + api + " args=" +
+                  [a0, a1, a2, a3].join(","));
+              break;
+          }
+          state.bridge.lastResult = result | 0;
+          return result | 0;
+        },
       },
     };
     const result = await WebAssembly.instantiate(bytes, imports);
@@ -169,6 +195,7 @@ class BootRuntime {
     $("#runtimeState").textContent = "RUNNING";
     setStatus("Running");
     log("boot instantiated; init rc=" + rc);
+    log("bridge ready: kernel32 timing + user32 keyboard; unsupported calls are traced");
     this.loop();
   }
 
@@ -389,11 +416,11 @@ window.addEventListener("keydown", (event) => {
   if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"].includes(event.code)) {
     event.preventDefault();
   }
-  heldKeys.add(event.code);
+  state.keys.add(keyCodes.get(event.code) || event.keyCode || 0);
   state.runtime?.input(keyCodes.get(event.code) || event.keyCode || 0, true);
 });
 window.addEventListener("keyup", (event) => {
-  heldKeys.delete(event.code);
+  state.keys.delete(keyCodes.get(event.code) || event.keyCode || 0);
   state.runtime?.input(keyCodes.get(event.code) || event.keyCode || 0, false);
 });
 
