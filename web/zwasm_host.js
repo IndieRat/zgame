@@ -28,6 +28,22 @@
       /(^|\/)zwasm_guest\/dlls\/[^/]+\.dll$/i.test(e.path));
   }
 
+  function findZapiEntries(manifest) {
+    const listed = Array.isArray(manifest.zapi) ? manifest.zapi : [];
+    const entries = manifest.entries || [];
+    const out = listed.map((p) => entries.find((x) => x.path === p)).filter(Boolean);
+    if (out.length) return out;
+    return entries.filter((e) => /\\.zapi$/i.test(e.path));
+  }
+
+  function findZdllEntries(manifest) {
+    const listed = Array.isArray(manifest.zdlls) ? manifest.zdlls : [];
+    const entries = manifest.entries || [];
+    const out = listed.map((p) => entries.find((x) => x.path === p)).filter(Boolean);
+    if (out.length) return out;
+    return entries.filter((e) => /(^|\\/)zwasm_guest\\/zdlls\\/[^/]+\\.zdll$/i.test(e.path));
+  }
+
   function findXapiEntries(manifest) {
     const listed = Array.isArray(manifest.xapi) ? manifest.xapi : [];
     const entries = manifest.entries || [];
@@ -101,7 +117,7 @@
     return table;
   }
 
-  const api = { GUEST_PATHS, findGuestEntry, findGuestDlls, findXapiEntries,
+  const api = { GUEST_PATHS, findGuestEntry, findGuestDlls, findZapiEntries, findZdllEntries, findXapiEntries,
                 runtimeKind, fillMissingImports, readXapiTable };
   if (typeof module === "object" && module && module.exports) module.exports = api;
   else root.ZWASMHost = api;
