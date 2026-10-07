@@ -884,7 +884,7 @@ static uint32_t guest_alloc_raw(uint32_t n){
  if(!n)return 0;
  uint32_t a=al4(guest_heap);
  uint32_t end=a+al4(n);
- if(end<a||end>GUEST_HEAP_LIMIT)return 0;
+ if(end<a||end>GUEST_HEAP_LIMIT||!x86_mem_ensure_wasm(end))return 0; /* x86_alloc'd staging buffers must be backed by real wasm pages */
  guest_heap=end; return a;
 }
 /* ---- Win32 / CRT shim layer (table driven) -------------------------------
@@ -3093,6 +3093,17 @@ __attribute__((export_name("x86_xapi_register_alias"))) uint32_t x86_xapi_regist
 __attribute__((export_name("x86_get_xapi_count"))) uint32_t x86_get_xapi_count(void){return xapi_count;}
 __attribute__((export_name("x86_get_xapi_duplicate_count"))) uint32_t x86_get_xapi_duplicate_count(void){return xapi_duplicate_count;}
 __attribute__((export_name("x86_get_xapi_id"))) uint32_t x86_get_xapi_id(uint32_t i){return i<xapi_count?xapi_fn[i].id:0;}
+/* Describe registered function i for the shell: writes "lib\0name\0" into the xapi scratch
+ * buffer and returns nargs | ret<<8 | abi<<16, or 0xFFFFFFFF when i is out of range. */
+__attribute__((export_name("x86_xapi_describe"))) uint32_t x86_xapi_describe(uint32_t i){
+ if(i>=xapi_count)return 0xFFFFFFFFu;
+ const x86_xapi_fn_t*f=&xapi_fn[i];uint32_t o=0;
+ for(const char*c=xapi_pool+f->lib_off;*c&&o<250u;c++)xapi_scratch[o++]=(uint8_t)*c;
+ xapi_scratch[o++]=0;
+ for(const char*c=xapi_pool+f->name_off;*c&&o<500u;c++)xapi_scratch[o++]=(uint8_t)*c;
+ xapi_scratch[o++]=0;
+ return (uint32_t)f->nargs|((uint32_t)f->ret<<8)|((uint32_t)f->abi<<16);
+}
 __attribute__((export_name("x86_get_xapi_call_count"))) uint32_t x86_get_xapi_call_count(uint32_t i){return i<xapi_count?xapi_fn[i].calls:0;}
 __attribute__((export_name("x86_get_last_xapi_id"))) uint32_t x86_get_last_xapi_id(void){return xapi_last_id;}
 __attribute__((export_name("x86_guest_read8"))) uint32_t x86_guest_read8(uint32_t a){return MEM8(a);}
