@@ -81,3 +81,28 @@ v0.2 provides:
 - entry inspector, fullscreen canvas, keyboard/mouse capture, and diagnostics.
 
 Not included yet: a generic PE translator or a complete Win32/OpenGL host ABI. Those belong in the runtime/translator layer rather than the container format.
+
+
+## Executable x86 guest mode
+
+ZWASM can host the existing XWASM x86 runtime as its executable browser module. Build an x86 package with:
+
+    python tools/zwasm_build.py "C:\\Games\\Isaac" --runtime "C:\\x86-to-wasm-packager\\dist\\x86-runtime-v0.9\\runtime.wasm"
+
+The builder also auto-detects that standard runtime path. When it finds a PE executable, it copies it to zwasm_guest/guest.pe and generates a safe zwasm_guest/image.bin when one was not supplied.
+
+The browser lifecycle is:
+
+    runtime.wasm
+        -> instantiate host imports
+        -> x86_alloc(raw PE size)
+        -> copy zwasm_guest/guest.pe into linear memory
+        -> x86_load_pe()
+        -> x86_run() per requestAnimationFrame
+        -> browser input / graphics / audio host callbacks
+
+The generated adapter remains useful for testing the container and browser shell, but it is not an x86 CPU. An actual x86 game package therefore needs the XWASM runtime.
+
+The browser host currently maps the XWASM runtime graphics primitives to the game canvas, beep audio to Web Audio, and keyboard events to the runtime input queue. Unsupported runtime imports are stubbed and traced so missing coverage is visible instead of causing an opaque WebAssembly link failure.
+
+This follows the same broad separation demonstrated by the supplied browser reference: executable Wasm module, guest image/executable state, virtualized files, and a browser host boundary. Emscripten likewise provides a virtual filesystem, lazy file loading, WebGL integration, and Web Audio/OpenAL integration. 
