@@ -322,7 +322,7 @@ async function loadSource(source, label, size) {
     const runtime = reader.entry("zwasm_guest/guest.pe") ? new GuestRuntime(reader) : new BootRuntime(reader);
     state.runtime = runtime;
     await runtime.start();
-    drawBootFrame();
+    if (runtime instanceof BootRuntime) drawBootFrame();
     $("#overlay").style.display = "none";
   }
   return reader;
