@@ -1915,6 +1915,14 @@ static void x87_init_state(void){
  x87_trace_reset();
  for(uint32_t i=0;i<8u;i++)x87_stack[i]=0.0;
 }
+/* FCOMI/FUCOMI family: compare ST0 with ST(i) and report through EFLAGS (ZF,PF,CF); OF/SF/AF cleared. */
+static void x87_set_eflags_compare(double a,double b){
+ uint32_t f=eflags&~(CF|PF|AF|ZF|SF|OF);
+ if(x87_is_nan(a)||x87_is_nan(b))f|=ZF|PF|CF;
+ else if(a==b)f|=ZF;
+ else if(a<b)f|=CF;
+ eflags=f;
+}
 static int cpu_step_x87(uint8_t op,uint32_t *ip){
  uint32_t x87_eip=*ip-1u;
  uint8_t m=MEM8((*ip)++),mod=(m>>6)&3u,sub=(m>>3)&7u,r=m&7u;uint32_t ea=0;
@@ -2023,6 +2031,13 @@ static int cpu_step_x87(uint8_t op,uint32_t *ip){
    if(take){if(!x87_valid_reg(r)||!x87_need_top())return -61;x87_stack[0]=x87_stack[r];}
    return 0;
   }
+  if(m==0xE0u||m==0xE1u||m==0xE4u)return 0;               /* FENI/FDISI/FSETPM: 8087-era no-ops */
+  if(m==0xE2u){x87_status&=(uint16_t)~0x80FFu;return 0;}  /* FNCLEX */
+  if(m==0xE3u){x87_init_state();return 0;}                /* FNINIT */
+  if((m&0xF0u)==0xE8u||(m&0xF0u)==0xF0u){                 /* FUCOMI (E8+i) / FCOMI (F0+i) */
+   if(!x87_need_top()||!x87_valid_reg(r))return -61;
+   x87_set_eflags_compare(x87_stack[0],x87_stack[r]);return 0;
+  }
  }
 
  /* DA: integer arithmetic and FCMOVB/E/BE/U. */
@@ -2033,7 +2048,12 @@ static int cpu_step_x87(uint8_t op,uint32_t *ip){
    int32_t iv=x87_load_i32(ea);double v=(double)iv;
    if(sub==0u)x87_stack[0]+=v;else if(sub==1u)x87_stack[0]*=v;else if(sub==2u)x87_set_compare(x87_stack[0],v);else if(sub==3u){x87_set_compare(x87_stack[0],v);if(!x87_pop())return -61;}else if(sub==4u)x87_stack[0]-=v;else if(sub==5u)x87_stack[0]=v-x87_stack[0];else if(sub==6u)x87_stack[0]/=v;else x87_stack[0]=v/x87_stack[0];return 0;
   }
-  if((m&0xF8u)>=0xC0u){
+  if(m==0xE9u){                                            /* FUCOMPP */
+   if(!x87_valid_reg(1)||!x87_need_top())return -61;
+   x87_set_compare(x87_stack[0],x87_stack[1]);
+   if(!x87_pop())return -61;if(!x87_pop())return -61;return 0;
+  }
+  if((m&0xF8u)>=0xC0u&&(m&0xF8u)<=0xD8u){
    uint32_t block=(m>>3)&3u;
    int take=(block==0)?(eflags&CF):(block==1)?(eflags&ZF):(block==2)?((eflags&CF)||(eflags&ZF)):(eflags&PF);
    if(take){if(!x87_valid_reg(r)||!x87_need_top())return -61;x87_stack[0]=x87_stack[r];}
@@ -2061,6 +2081,11 @@ static int cpu_step_x87(uint8_t op,uint32_t *ip){
    if(sub==7u){wr16(ea,x87_status_word());return 0;} /* FNSTSW */
    cpu_error=0xDD00u|sub;return -60;
   }
+  if((m&0xF0u)==0xE0u){                                   /* FUCOM (E0+i) / FUCOMP (E8+i) */
+   if(!x87_need_top()||!x87_valid_reg(r))return -61;
+   x87_set_compare(x87_stack[0],x87_stack[r]);
+   if((m&0x08u)&&!x87_pop())return -61;return 0;
+  }
   if((m&0xF8u)==0xC0u){if(!x87_valid_reg(r))return -61;x87_stack[r]=0.0;return 0;} /* FFREE */
   if((m&0xF8u)==0xD0u){if(!x87_valid_reg(r)||!x87_need_top())return -61;x87_stack[r]=x87_stack[0];return 0;}
   if((m&0xF8u)==0xD8u){if(!x87_valid_reg(r)||!x87_need_top())return -61;x87_stack[r]=x87_stack[0];return x87_pop()?0:-61;}
@@ -2083,6 +2108,11 @@ static int cpu_step_x87(uint8_t op,uint32_t *ip){
  /* DF: 16/64-bit integer load/store and FNSTSW AX. */
  if(op==0xDFu){
   if(mod==3u&&m==0xE0u){reg16_write(0,x87_status_word());return 0;}
+  if(mod==3u&&((m&0xF0u)==0xE8u||(m&0xF0u)==0xF0u)){       /* FUCOMIP (E8+i) / FCOMIP (F0+i) */
+   if(!x87_need_top()||!x87_valid_reg(r))return -61;
+   x87_set_eflags_compare(x87_stack[0],x87_stack[r]);
+   return x87_pop()?0:-61;
+  }
   if(mod!=3u){
    if(sub==0u)return x87_push((double)x87_load_i16(ea))?0:-62;
    if(sub==1u){if(!x87_need_top())return -61;x87_store_i16(ea,(int16_t)x87_round(x87_stack[0],1));return x87_pop()?0:-61;}
@@ -3114,6 +3144,9 @@ __attribute__((export_name("x86_get_last_unresolved_gdr"))) uint32_t x86_get_las
 __attribute__((export_name("x86_get_gdr_dll_name_byte"))) uint32_t x86_get_gdr_dll_name_byte(uint32_t i,uint32_t j){return (i<x86_gdr_count&&j<255u)?MEM8(image_base+x86_gdr[i].dll_rva+j):0;}
 __attribute__((export_name("x86_get_gdr_func_name_byte"))) uint32_t x86_get_gdr_func_name_byte(uint32_t i,uint32_t j){return (i<x86_gdr_count&&j<255u)?MEM8(image_base+x86_gdr[i].func_rva+2u+j):0;}
 __attribute__((export_name("x86_alloc"))) uint32_t x86_alloc(uint32_t n){return guest_alloc_raw(n);}
+/* Like x86_alloc, but the block is a registered readable/writable guest memory region, which
+ * x86_dll_register_image and the x86_fs_* mount calls require for their source buffers. */
+__attribute__((export_name("x86_alloc_region"))) uint32_t x86_alloc_region(uint32_t n){return x86_mem_alloc_region(n,X86_MEM_READ|X86_MEM_WRITE,9u);}
 __attribute__((export_name("x86_crt_malloc"))) uint32_t x86_crt_malloc(uint32_t size){return x86_crt_malloc_impl(size);}
 __attribute__((export_name("x86_crt_calloc"))) uint32_t x86_crt_calloc(uint32_t count,uint32_t size){return x86_crt_calloc_impl(count,size);}
 __attribute__((export_name("x86_crt_free"))) uint32_t x86_crt_free(uint32_t address){return x86_crt_free_impl(address);}
