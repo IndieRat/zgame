@@ -192,7 +192,7 @@ def build(args: argparse.Namespace) -> Path:
 
     guest_package: str | None = None
     guest_dll_packages: list[str] = []
-    xapi_packages: list[str] = []
+    zapi_packages: list[str] = []
     zdll_packages: list[str] = []
     extra_roles: list[tuple[str, Path, str]] = []
     if args.guest:
@@ -212,13 +212,20 @@ def build(args: argparse.Namespace) -> Path:
         pkg = "zwasm_guest/dlls/" + dll_path.name
         guest_dll_packages.append(pkg)
         extra_roles.append((pkg, dll_path, "guest-dll"))
-    for item in args.xapi:
-        xapi_path = Path(item).resolve()
-        if not xapi_path.is_file():
-            raise PackageError("xapi file does not exist: " + str(xapi_path))
-        pkg = "zwasm_guest/xapi/" + xapi_path.name
-        xapi_packages.append(pkg)
-        extra_roles.append((pkg, xapi_path, "xapi"))
+    for item in args.zapi:
+        zapi_path = Path(item).resolve()
+        if not zapi_path.is_file():
+            raise PackageError("zapi file does not exist: " + str(zapi_path))
+        pkg = "zwasm_guest/zapi/" + zapi_path.name
+        zapi_packages.append(pkg)
+        extra_roles.append((pkg, zapi_path, "zapi"))
+    for item in args.zdll:
+        zdll_path = Path(item).resolve()
+        if not zdll_path.is_file():
+            raise PackageError("zdll file does not exist: " + str(zdll_path))
+        pkg = "zwasm_guest/zdlls/" + zdll_path.name
+        zdll_packages.append(pkg)
+        extra_roles.append((pkg, zdll_path, "zdll"))
     for pkg, path, role in extra_roles:
         candidates.append((pkg, path, role))
         reserved_sources.add(path.resolve())
@@ -281,7 +288,8 @@ def build(args: argparse.Namespace) -> Path:
             "trail": trail_package,
             "guest": guest_package,
             "guestDlls": guest_dll_packages,
-            "xapi": xapi_packages,\n            "zdlls": zdll_packages,
+            "zapi": zapi_packages,
+            "zdlls": zdll_packages,
             "entries": entries,
         }
 
@@ -349,7 +357,9 @@ def build(args: argparse.Namespace) -> Path:
     print("[ZWASM] boot:    " + (manifest["boot"] or "(none)"))
     print("[ZWASM] image:   " + (manifest["image"] or "(none)"))
     print("[ZWASM] guest:   " + (manifest["guest"] or "(none)"))
-    print("[ZWASM] dlls:    " + str(len(manifest["guestDlls"])))\n    print("[ZWASM] zdlls:   " + str(len(manifest["zdlls"])))
+    print("[ZWASM] dlls:    " + str(len(manifest["guestDlls"])))
+    print("[ZWASM] zapi:    " + str(len(manifest["zapi"])))
+    print("[ZWASM] zdlls:   " + str(len(manifest["zdlls"])))
     return output
 
 def parse_args() -> argparse.Namespace:
@@ -363,7 +373,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--trail", help="boot trail JSON to embed")
     p.add_argument("--guest", help="PE32 game executable to embed as zwasm_guest/guest.pe")
     p.add_argument("--guest-dll", action="append", default=[], help="bundled guest DLL (repeatable)")
-    p.add_argument("--xapi", action="append", default=[], help="xapi manifest to embed (repeatable)")\n    p.add_argument("--zdll", action="append", default=[], help="ZWASM WASM DLL container to embed (repeatable)")
+    p.add_argument("--zapi", action="append", default=[], help="ZWASM API manifest to embed (repeatable)")
+    p.add_argument("--xapi", action="append", default=[], help="legacy .xapi compatibility alias")
+    p.add_argument("--zdll", action="append", default=[], help="ZWASM WASM DLL container to embed (repeatable)")
     p.add_argument("--exclude", action="append", default=[], help="glob to exclude")
     p.add_argument(
         "--include-native",
@@ -379,7 +391,9 @@ def parse_args() -> argparse.Namespace:
         default=16 * 1024 * 1024,
         help="auto mode only compresses files up to this size",
     )
-    return p.parse_args()
+    args = p.parse_args()
+    args.zapi.extend(args.xapi)
+    return args
 
 
 def main() -> int:
