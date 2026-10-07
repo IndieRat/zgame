@@ -98,6 +98,12 @@ static uint32_t halted=0;
 static uint8_t decoded_prefixes=0,decoded_operand16=0;
 #define X86_FS_TEB_BASE 0x01E00000u
 #define X86_GS_TEB_BASE 0x01E01000u
+/* Guest stack: the top is seeded at 0x03F00000 and the stack grows downward.
+ * It must be a registered guest region, not merely backed by WASM pages, so
+ * CALL/PUSH/POP/RET validation accepts normal compiler-generated epilogues. */
+#define X86_STACK_BASE 0x03E00000u
+#define X86_STACK_TOP  0x03F00000u
+#define X86_STACK_SIZE (X86_STACK_TOP-X86_STACK_BASE)
 static uint32_t x86_fs_base=0,x86_gs_base=0;
 /* Synthetic Win32-compatible user-mode segment selectors. FS/GS bases are
  * virtualized independently, so selector values only model the observable
@@ -2728,9 +2734,10 @@ static int load_pe(uint32_t f,uint32_t sz){
  wr32(X86_FS_TEB_BASE+0x30u,X86_FS_TEB_BASE+0x100u);
  wr32(X86_GS_TEB_BASE+0x18u,X86_GS_TEB_BASE);
  /* Ensure the guest stack has real WASM backing before the first PUSH. */
- if(!x86_mem_ensure_wasm(0x03F00000u)){load_error=16;return-7;}
+ if(!x86_mem_ensure_wasm(X86_STACK_TOP)){load_error=16;return-7;}
+ if(!x86_mem_region_add(X86_STACK_BASE,X86_STACK_SIZE,X86_MEM_READ|X86_MEM_WRITE,6u)){load_error=16;return-7;}
  x87_init_state(); xmm_reset();
- loaded=1;eip=image_base+entry;regs[R_ESP]=0x03F00000u;
+ loaded=1;eip=image_base+entry;regs[R_ESP]=X86_STACK_TOP;
 /* A PE entrypoint is invoked by the runtime rather than by a guest CALL. Seed a
  * synthetic return address so C fixtures whose entrypoint is main() can RET cleanly. */
 if(!x86_stack_push32(X86_ENTRY_RETURN_SENTINEL)){loaded=0;load_error=16;return-7;}
