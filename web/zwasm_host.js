@@ -36,13 +36,23 @@
     return entries.filter((e) => /\.zapi$/i.test(e.path));
   }
 
-  function findZdllEntries(manifest) {
-    const listed = Array.isArray(manifest.zdlls) ? manifest.zdlls : [];
-    const entries = manifest.entries || [];
-    const out = listed.map((p) => entries.find((x) => x.path === p)).filter(Boolean);
-    if (out.length) return out;
-    return entries.filter((e) => /(^|\/)zwasm_guest\/zdlls\/[^/]+\.zdll$/i.test(e.path));
-  }
+	function findZdllEntries(manifest) {
+		const listed = Array.isArray(manifest.zdlls)
+			? manifest.zdlls
+			: [];
+
+		const entries = manifest.entries || [];
+
+		const out = listed
+			.map((p) => entries.find((x) => x.path === p))
+			.filter(Boolean);
+
+		if (out.length)
+			return out;
+
+		return entries.filter((e) =>
+			/\.zdll$/i.test(e.path));
+	}
 
   function findXapiEntries(manifest) {
     const listed = Array.isArray(manifest.xapi) ? manifest.xapi : [];
