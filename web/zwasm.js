@@ -140,6 +140,7 @@ class GuestRuntime {
     this.reader = reader; this.module = module; this.instance = null; this.memory = null;
     this.running = false; this.inputQueue = []; this.audio = null; this.ctx2d = null; this.imageData = null;
     this.xapiTable = new Map(); this.xapiUnsupported = new Map(); this.diagShown = false;
+    this.unresolved = new Map(); this.pendingFns = [];
   }
 
   mem() { return new Uint8Array(this.instance.exports.memory.buffer); }
@@ -150,8 +151,8 @@ class GuestRuntime {
     for (let i = 0; i < 4; i++) { ex.x86_guest_write8(a + i, (lo >>> (i * 8)) & 255); ex.x86_guest_write8(a + 4 + i, (hi >>> (i * 8)) & 255); }
   }
 
-  allocCopy(bytes) {
-    const ex = this.instance.exports, ptr = ex.x86_alloc(bytes.length + 1);
+  allocCopy(bytes, region) {
+    const ex = this.instance.exports, ptr = (region ? ex.x86_alloc_region : ex.x86_alloc)(bytes.length + 1);
     if (!ptr) throw new Error("x86_alloc failed for " + bytes.length + " bytes");
     const m = this.mem(); m.set(bytes, ptr); m[ptr + bytes.length] = 0;
     return ptr;
@@ -165,7 +166,15 @@ class GuestRuntime {
     const css = (c) => "#" + ((c >>> 0) & 0xffffff).toString(16).padStart(6, "0");
     const resize = (w, h) => { w = Math.max(1, Math.min(1920, w | 0)); h = Math.max(1, Math.min(1080, h | 0)); canvas.width = w; canvas.height = h; self.imageData = self.ctx2d.createImageData(w, h); };
     resize(640, 360);
-    env.z_host_log = (level, ptr, len) => log("x86[" + level + "]: " + readString(ptr, Math.min(len >>> 0, 4096)));
+    env.z_host_log = (level, ptr, len) => {
+      const text = readString(ptr, Math.min(len >>> 0, 4096));
+      if (level === 2) { // runtime reports each unresolved import as a function line plus a DLL line
+        if (/\.dll$/i.test(text)) { const g = self.unresolved.get(text) || []; g.push(...self.pendingFns); self.pendingFns = []; self.unresolved.set(text, g); }
+        else self.pendingFns.push(text);
+        return;
+      }
+      log("x86[" + level + "]: " + text);
+    };
     env.z_host_input_quit = () => { self.inputQueue.push({ quit: true }); };
     env.z_host_input_poll = (ptr, remove) => {
       const ev = self.inputQueue[0]; if (!ev) return 0;
@@ -248,9 +257,9 @@ class GuestRuntime {
       const bytes = await this.reader.readEntry(dll.path);
       const name = dll.path.split("/").pop();
       const namePtr = this.allocCopy(new TextEncoder().encode(name));
-      const dataPtr = this.allocCopy(bytes);
-      const rc = ex.x86_dll_register_image(namePtr, dataPtr, bytes.length);
-      log("dll register " + name + " · " + fmtBytes(bytes.length) + " rc=" + rc);
+      const dataPtr = this.allocCopy(bytes, true);
+      const ok = ex.x86_dll_register_image(namePtr, dataPtr, bytes.length) === 1; // 1 = registered, 0 = failed
+      log("dll register " + name + " · " + fmtBytes(bytes.length) + (ok ? " ok" : " FAILED last_error=" + ex.x86_dll_get_last_error()));
     }
 
     const pe = await this.reader.readEntry(guest.path);
@@ -260,10 +269,13 @@ class GuestRuntime {
     if (rc !== 0) throw new Error("x86_load_pe failed rc=" + rc + " load_error=" + (ex.x86_get_load_error?.() ?? "?"));
 
     for (const dll of dlls) {
-      const namePtr = this.allocCopy(new TextEncoder().encode(dll.path.split("/").pop()));
-      ex.x86_dll_load_registered(namePtr);
+      const name = dll.path.split("/").pop();
+      const base = ex.x86_dll_load_registered(this.allocCopy(new TextEncoder().encode(name))) >>> 0;
+      log("dll load " + name + " -> " + (base ? "base=0x" + base.toString(16) : "FAILED last_error=" + ex.x86_dll_get_last_error()));
     }
+    log("dlls loaded: " + ex.x86_dll_get_count() + " of " + dlls.length + " bundled");
     if (dlls.length) log("dll rebind: unresolved imports=" + ex.x86_dll_rebind_imports());
+    this.reportUnresolved();
 
     await this.loadXapiManifests();
     log("imports: " + ex.x86_get_import_resolved() + "/" + ex.x86_get_import_count() + " resolved, " + ex.x86_get_import_failed() + " failed · xapi functions: " + ex.x86_get_xapi_count());
@@ -273,11 +285,23 @@ class GuestRuntime {
     this.loop();
   }
 
+  reportUnresolved() {
+    if (!this.unresolved.size) return;
+    let total = 0;
+    for (const [dll, fns] of [...this.unresolved].sort((a, b) => b[1].length - a[1].length)) {
+      total += fns.length;
+      log("unresolved " + dll + ": " + fns.length + " (" + fns.slice(0, 6).join(", ") + (fns.length > 6 ? ", ..." : "") + ")");
+    }
+    log("unresolved total: " + total);
+  }
+
   diagnostics(reason) {
     if (this.diagShown || !this.instance) return;
     this.diagShown = true;
     const ex = this.instance.exports, hex = (v) => "0x" + (v >>> 0).toString(16);
     log("diag: " + reason + " eip=" + hex(ex.x86_get_eip()) + " steps=" + ex.x86_get_steps() + " cpu_error=" + hex(ex.x86_get_cpu_error()) + " halted=" + ex.x86_get_halted());
+    let bytes = ""; for (let i = 0; i < 12; i++) bytes += (ex.x86_get_current_byte(i) & 255).toString(16).padStart(2, "0") + " ";
+    log("diag: bytes at eip: " + bytes + "| last x87 op=" + hex(ex.x86_get_x87_last_opcode()) + " modrm=" + hex(ex.x86_get_x87_last_modrm()) + " at " + hex(ex.x86_get_x87_last_eip()));
     log("diag: imports " + ex.x86_get_import_resolved() + "/" + ex.x86_get_import_count() + " resolved, " + ex.x86_get_import_failed() + " failed; crt exited=" + ex.x86_crt_get_exited() + " code=" + ex.x86_crt_get_exit_code() + " last xapi id=" + ex.x86_get_last_xapi_id());
     const str = (fnName, i) => { let s = ""; for (let j = 0; j < 255; j++) { const c = ex[fnName](i, j); if (!c) break; s += String.fromCharCode(c); } return s; };
     let shown = 0;
