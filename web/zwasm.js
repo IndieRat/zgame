@@ -261,7 +261,7 @@ class GuestRuntime {
     const zfn = this.zapiTable.get(id >>> 0);
     let result = 0;
     if (zfn) {
-      const dll = this.zdlls.get(zfn.dll);
+      const dll = this.zdlls.get(String(zfn.dll).toLowerCase()) || this.zdlls.get(zfn.dll);
       if (!dll) {
         state.bridge.unsupported++;
         log("zapi missing zdll: " + zfn.dll + " for api " + id);
