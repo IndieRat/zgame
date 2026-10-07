@@ -80,8 +80,7 @@
       <p class="note">
         The shell validates the ZWASM container, reads entries lazily, instantiates the
         embedded boot.wasm module, forwards keyboard input, renders a runtime viewport,
-        and stores lightweight save checkpoints in IndexedDB. The boot adapter is a real
-        WASM module, while a full PE/Win32/OpenGL runtime remains a separate layer.
+        and stores lightweight save checkpoints in IndexedDB. The shell can run either the lightweight adapter or the XWASM x86 runtime. In x86 mode it loads the packaged PE guest, drives x86_run, and forwards browser input, graphics, and audio host calls.
       </p>
     </section>
   </main>
