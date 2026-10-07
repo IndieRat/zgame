@@ -25,3 +25,12 @@ def test_boot_compiles_when_clang_exists(tmp_path):
         "-o", str(output), str(ROOT / "runtime" / "boot.c"),
     ], check=True)
     assert output.is_file() and output.stat().st_size > 0
+
+
+def test_builder_supports_x86_runtime_and_guest():
+    source = (ROOT / "tools" / "zwasm_build.py").read_text(encoding="utf-8")
+    assert '--runtime' in source
+    assert '--guest' in source
+    assert 'zwasm_guest' in source
+    assert 'guest.pe' in source
+    assert 'runtime.wasm' in source
