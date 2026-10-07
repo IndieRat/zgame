@@ -181,7 +181,7 @@ class GuestRuntime {
     const result=await WebAssembly.instantiate(module,imports);instance=result;
     this.instance=instance;refreshMemory();
     if(!this.memory)throw new Error("x86 runtime does not export/import memory");
-    if(typeof instance.exports.xwasm_init==="function")instance.exports.xwasm_init();
+    if(typeof instance.exports.zwasm_init==="function")instance.exports.zwasm_init();
 
     const guestPath=manifest.guest||"zwasm_guest/guest.pe";
     let guest=this.reader.entry(guestPath);
@@ -189,7 +189,7 @@ class GuestRuntime {
     if(!guest)throw new Error("package has no raw PE guest; rebuild with zwasm_build.py so zwasm_guest/guest.pe is embedded");
     const pe=await this.reader.readEntry(guest.path);
     if(typeof instance.exports.x86_alloc!=="function"||typeof instance.exports.x86_load_pe!=="function"){
-      throw new Error("runtime lacks x86_alloc/x86_load_pe; supply the XWASM x86 runtime.wasm");
+      throw new Error("runtime lacks x86_alloc/x86_load_pe; package was not built with the ZWASM x86 runtime");
     }
     const ptr=instance.exports.x86_alloc(pe.length);
     if(!ptr)throw new Error("x86_alloc failed for "+pe.length+" bytes");
