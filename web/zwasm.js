@@ -147,18 +147,18 @@ class GuestRuntime {
     const resizeSurface=(w,h)=>{w=Math.max(1,Math.min(1920,w|0));h=Math.max(1,Math.min(1080,h|0));canvas.width=w;canvas.height=h;this.imageData=this.ctx2d?.createImageData(w,h)||null;};
     resizeSurface(640,360);
 
-    imports.env.xwasm_log=(level,ptr,len)=>log("x86["+level+"]: "+readString(ptr,Math.min(len>>>0,4096)));
-    imports.env.xwasm_input_quit=()=>{this.inputQueue.push({quit:true});};
-    imports.env.xwasm_input_poll=(ptr,remove)=>{const ev=this.inputQueue[0];if(!ev)return 0;const m=memView();if(ptr<0||ptr+28>m.length)return 0;
-      const d=new DataView(m.buffer);d.setUint32(ptr,0,true);d.setUint32(ptr+4,ev.type>>>0,true);d.setUint32(ptr+8,ev.code>>>0,true);d.setUint32(ptr+12,ev.value>>>0,true);d.setUint32(ptr+16,Date.now()/1|0,true);d.setInt32(ptr+20,ev.x|0,true);d.setInt32(ptr+24,ev.y|0,true);d.setUint32(ptr+26,0,true);
+    imports.env.z_host_log=(level,ptr,len)=>log("x86["+level+"]: "+readString(ptr,Math.min(len>>>0,4096)));
+    imports.env.z_host_input_quit=()=>{this.inputQueue.push({quit:true});};
+    imports.env.z_host_input_poll=(ptr,remove)=>{const ev=this.inputQueue[0];if(!ev)return 0;const m=memView();if(ptr<0||ptr+28>m.length)return 0;
+      const d=new DataView(m.buffer);d.setUint32(ptr,0,true);d.setUint32(ptr+4,ev.type>>>0,true);d.setUint32(ptr+8,ev.code>>>0,true);d.setUint32(ptr+12,ev.value>>>0,true);d.setUint32(ptr+16,Date.now()/1|0,true);d.setInt32(ptr+20,ev.x|0,true);d.setInt32(ptr+24,ev.y|0,true);
       if(remove)this.inputQueue.shift(); return 1;};
-    imports.env.xwasm_audio_beep=(frequency,duration)=>{try{const a=ensureAudio(),o=a.createOscillator(),g=a.createGain();o.frequency.value=Math.max(40,Math.min(12000,frequency||440));g.gain.value=.045;o.connect(g).connect(a.destination);o.start();o.stop(a.currentTime+Math.max(.01,Math.min(2,(duration||50)/1000)));}catch(e){log("audio: "+e.message);}};
-    imports.env.xwasm_gfx_create=(w,h)=>{resizeSurface(w,h);return 1;};
-    imports.env.xwasm_gfx_clear=(color)=>{if(!this.ctx2d)return 0;const c=color>>>0;this.ctx2d.save();this.ctx2d.fillStyle="#"+(c&0xffffff).toString(16).padStart(6,"0");this.ctx2d.fillRect(0,0,canvas.width,canvas.height);this.ctx2d.restore();return 0;};
-    imports.env.xwasm_gfx_pixel=(x,y,color)=>{if(!this.imageData)return 0;x|=0;y|=0;if(x<0||y<0||x>=this.imageData.width||y>=this.imageData.height)return 0;const c=color>>>0,p=(y*this.imageData.width+x)*4;this.imageData.data[p]=(c>>>16)&255;this.imageData.data[p+1]=(c>>>8)&255;this.imageData.data[p+2]=c&255;this.imageData.data[p+3]=255;return 0;};
-    imports.env.xwasm_gfx_rect=(l,t,r,b,color)=>{if(!this.ctx2d)return 0;const c=color>>>0;this.ctx2d.fillStyle="#"+(c&0xffffff).toString(16).padStart(6,"0");this.ctx2d.fillRect(l|0,t|0,Math.max(0,(r-l)|0),Math.max(0,(b-t)|0));return 0;};
-    imports.env.xwasm_gfx_present=()=>{present();return 0;};
-    imports.env.xwasm_xapi_call=(id,argc)=>{state.bridge.calls++;state.bridge.lastApi=id|0;state.bridge.lastResult=0;return 0;};
+    imports.env.z_host_audio_beep=(frequency,duration)=>{try{const a=ensureAudio(),o=a.createOscillator(),g=a.createGain();o.frequency.value=Math.max(40,Math.min(12000,frequency||440));g.gain.value=.045;o.connect(g).connect(a.destination);o.start();o.stop(a.currentTime+Math.max(.01,Math.min(2,(duration||50)/1000)));}catch(e){log("audio: "+e.message);}};
+    imports.env.z_host_gfx_create=(w,h)=>{resizeSurface(w,h);return 1;};
+    imports.env.z_host_gfx_clear=(color)=>{if(!this.ctx2d)return 0;const c=color>>>0;this.ctx2d.save();this.ctx2d.fillStyle="#"+(c&0xffffff).toString(16).padStart(6,"0");this.ctx2d.fillRect(0,0,canvas.width,canvas.height);this.ctx2d.restore();return 0;};
+    imports.env.z_host_gfx_pixel=(x,y,color)=>{if(!this.imageData)return 0;x|=0;y|=0;if(x<0||y<0||x>=this.imageData.width||y>=this.imageData.height)return 0;const c=color>>>0,p=(y*this.imageData.width+x)*4;this.imageData.data[p]=(c>>>16)&255;this.imageData.data[p+1]=(c>>>8)&255;this.imageData.data[p+2]=c&255;this.imageData.data[p+3]=255;return 0;};
+    imports.env.z_host_gfx_rect=(l,t,r,b,color)=>{if(!this.ctx2d)return 0;const c=color>>>0;this.ctx2d.fillStyle="#"+(c&0xffffff).toString(16).padStart(6,"0");this.ctx2d.fillRect(l|0,t|0,Math.max(0,(r-l)|0),Math.max(0,(b-t)|0));return 0;};
+    imports.env.z_host_gfx_present=()=>{present();return 0;};
+    imports.env.z_host_xapi_call=(id,argc)=>{state.bridge.calls++;state.bridge.lastApi=id|0;state.bridge.lastResult=0;return 0;};
 
     const moduleImports=WebAssembly.Module.imports(module);
     for(const item of moduleImports){
@@ -170,6 +170,12 @@ class GuestRuntime {
       } else if(item.kind==="table" && imports[item.module]?.[item.name]===undefined){
         imports[item.module]??={};
         imports[item.module][item.name]=new WebAssembly.Table({initial:0,element:"funcref"});
+      }
+    }
+    for (const item of moduleImports) {
+      const value = imports[item.module]?.[item.name];
+      if (item.kind === "function" && typeof value !== "function") {
+        throw new Error("missing callable WASM import: " + item.module + "." + item.name);
       }
     }
     const result=await WebAssembly.instantiate(module,imports);instance=result;
