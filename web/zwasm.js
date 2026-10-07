@@ -529,6 +529,8 @@ class GuestRuntime {
     log("diag: " + reason + " eip=" + hex(ex.x86_get_eip()) + " steps=" + ex.x86_get_steps() + " cpu_error=" + hex(ex.x86_get_cpu_error()) + " halted=" + ex.x86_get_halted());
     let bytes = ""; for (let i = 0; i < 12; i++) bytes += (ex.x86_get_current_byte(i) & 255).toString(16).padStart(2, "0") + " ";
     log("diag: bytes at eip: " + bytes + "| last x87 op=" + hex(ex.x86_get_x87_last_opcode()) + " modrm=" + hex(ex.x86_get_x87_last_modrm()) + " at " + hex(ex.x86_get_x87_last_eip()));
+    if (ex.x86_get_esp) log("diag: GPR ESP="+hex(ex.x86_get_esp())+" EBP="+hex(ex.x86_get_ebp?.() ?? 0)+" stack=["+hex(ex.x86_get_stack_region_base?.() ?? 0)+".."+hex(ex.x86_get_stack_region_top?.() ?? 0)+"]");
+    if (ex.x86_get_last_stack_fault_esp) log("diag: stack fault kind="+ex.x86_get_last_stack_fault_kind()+" esp="+hex(ex.x86_get_last_stack_fault_esp())+" eip="+hex(ex.x86_get_last_stack_fault_eip()));
     log("diag: imports " + ex.x86_get_import_resolved() + "/" + ex.x86_get_import_count() + " resolved, " + ex.x86_get_import_failed() + " failed; crt exited=" + ex.x86_crt_get_exited() + " code=" + ex.x86_crt_get_exit_code() + " last xapi id=" + ex.x86_get_last_xapi_id());
     const str = (fnName, i) => { let s = ""; for (let j = 0; j < 255; j++) { const c = ex[fnName](i, j); if (!c) break; s += String.fromCharCode(c); } return s; };
     let shown = 0;
