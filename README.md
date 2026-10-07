@@ -32,6 +32,39 @@ An existing browser runtime can be supplied instead:
 
 The builder does not convert a Windows .exe into a runnable WASM module. A prepared image/runtime must already exist for the actual game execution layer.
 
+## Native API frame: .zapi and .zdll
+
+ZWASM has its own native API vocabulary; it does not require XWASM's .xapi format. The stable frame is zworld.v1 with a fixed i32x5 call shape: API ID, up to four 32-bit arguments, and one 32-bit return value.
+
+A .zapi manifest maps stable API IDs to a .zdll implementation:
+
+    .zapi -> API ID/name/argc -> .zdll -> zdll_call(id, a0, a1, a2, a3)
+
+The browser shell now validates, instantiates, initializes, and registers bundled .zdll modules, then routes .zapi calls into them. .xapi remains accepted by the builder as a compatibility alias and is normalized into the ZWASM .zapi package role.
+
+A minimal .zapi looks like:
+
+    {
+      "schema": "zwasm.zapi/1",
+      "formatVersion": 1,
+      "name": "kernel32",
+      "abi": "zworld.v1",
+      "frame": "i32x5",
+      "dll": "kernel32.zdll",
+      "functions": [
+        {"id": 1, "name": "GetTickCount", "argc": 0, "export": "zdll_call"}
+      ]
+    }
+
+Build with native ZWASM terms:
+
+    python tools/zwasm_build.py "C:\\Games\\MyGame" --zapi kernel32.zapi --zdll kernel32.zdll
+
+The shell loads those modules into WebAssembly before guest API dispatch, so the package boundary is now:
+
+    PE guest -> runtime -> .zapi -> .zdll -> WASM/native host frame
+
+
 ## Browser shell
 
 Open web/index.html and choose the .zgame. The shell:
@@ -87,9 +120,9 @@ Not included yet: a generic PE translator or a complete Win32/OpenGL host ABI. T
 
 ZWASM can host the existing XWASM x86 runtime as its executable browser module. Build an x86 package with:
 
-    python tools/zwasm_build.py "C:\\Games\\Isaac" --runtime "C:\\x86-to-wasm-packager\\dist\\x86-runtime-v0.9\\runtime.wasm"
+    python tools/zwasm_build.py "C:\\Games\\Isaac"
 
-The builder also auto-detects that standard runtime path. When it finds a PE executable, it copies it to zwasm_guest/guest.pe and generates a safe zwasm_guest/image.bin when one was not supplied.
+The builder now uses the vendored x86 runtime by default; --runtime remains available for an explicit runtime. It also accepts --zapi and --zdll inputs. When it finds a PE executable, it copies it to zwasm_guest/guest.pe and generates a safe zwasm_guest/image.bin when one was not supplied.
 
 The browser lifecycle is:
 
@@ -101,7 +134,7 @@ The browser lifecycle is:
         -> x86_run() per requestAnimationFrame
         -> browser input / graphics / audio host callbacks
 
-The generated adapter remains useful for testing the container and browser shell, but it is not an x86 CPU. An actual x86 game package therefore needs the XWASM runtime.
+The generated adapter remains useful for testing the container and browser shell, but it is not an x86 CPU. The vendored x86 runtime is now the normal executable guest path.
 
 The browser host currently maps the XWASM runtime graphics primitives to the game canvas, beep audio to Web Audio, and keyboard events to the runtime input queue. Unsupported runtime imports are stubbed and traced so missing coverage is visible instead of causing an opaque WebAssembly link failure.
 
