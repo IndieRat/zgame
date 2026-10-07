@@ -2582,7 +2582,7 @@ static void scan_imports(void){
 #define X86_DLL_MAX_RESOURCES 64u
 #define X86_DLL_BASE 0x05000000u
 #define X86_DLL_STRIDE 0x00800000u
-typedef struct{uint32_t active,base,size,preferred,entry,reloc_rva,reloc_size,export_rva,export_size,imports_resolved,imports_failed,refcount;char name[96];}x86_dll_module_t;
+typedef struct{uint32_t active,base,size,preferred,entry,reloc_rva,reloc_size,export_rva,export_size,imports_resolved,imports_failed,refcount;char name[96];char requested_name[96];}x86_dll_module_t;
 typedef struct{uint32_t active,data,size;char name[96];}x86_dll_resource_t;
 static x86_dll_module_t x86_dll_modules[X86_DLL_MAX_MODULES];
 static x86_dll_resource_t x86_dll_resources[X86_DLL_MAX_RESOURCES];
@@ -2590,7 +2590,7 @@ static uint32_t x86_dll_last_error=0,x86_dll_last_base=0;
 static int x86_dll_cname_equal(const char*a,const char*b){uint32_t i=0;if(!a||!b)return 0;while(a[i]&&b[i]){char x=a[i],y=b[i];if(x>='A'&&x<='Z')x=(char)(x-'A'+'a');if(y>='A'&&y<='Z')y=(char)(y-'A'+'a');if(x!=y)return 0;i++;}return a[i]==0&&b[i]==0;}
 static int x86_dll_name_equal(uint32_t p,const char*n){uint32_t i=0;if(!p||!n)return 0;while(n[i]){char a=(char)MEM8(p+i),b=n[i];if(a>='A'&&a<='Z')a=(char)(a-'A'+'a');if(b>='A'&&b<='Z')b=(char)(b-'A'+'a');if(a!=b)return 0;i++;}return MEM8(p+i)==0;}
 static uint32_t x86_dll_basename_ptr(uint32_t p){uint32_t last=p;if(!p)return 0;for(uint32_t i=0;i<256u&&MEM8(p+i);i++)if(MEM8(p+i)=='/'||MEM8(p+i)=='\\')last=p+i+1u;return last;}
-static int x86_dll_find_loaded(uint32_t p){for(uint32_t i=0;i<X86_DLL_MAX_MODULES;i++)if(x86_dll_modules[i].active&&x86_dll_name_equal(p,x86_dll_modules[i].name))return (int)i;return -1;}
+static int x86_dll_find_loaded(uint32_t p){for(uint32_t i=0;i<X86_DLL_MAX_MODULES;i++)if(x86_dll_modules[i].active&&(x86_dll_name_equal(p,x86_dll_modules[i].name)||x86_dll_cname_equal((const char *)(uintptr_t)p,x86_dll_modules[i].requested_name)))return (int)i;return -1;}
 static int x86_dll_guest_name_equal(uint32_t a,uint32_t b){uint32_t i=0;if(!a||!b)return 0;while(MEM8(a+i)&&MEM8(b+i)){char x=(char)MEM8(a+i),y=(char)MEM8(b+i);if(x>='A'&&x<='Z')x=(char)(x-'A'+'a');if(y>='A'&&y<='Z')y=(char)(y-'A'+'a');if(x!=y)return 0;i++;}return MEM8(a+i)==0&&MEM8(b+i)==0;}
 static int x86_dll_apply_relocs(uint32_t base,uint32_t size,uint32_t preferred,uint32_t rva,uint32_t rsz){
  if(base==preferred)return 1;if(!rva||!rsz||rva>size||rsz>size-rva)return 0;
@@ -2656,8 +2656,9 @@ static int x86_dll_load_image(uint32_t f,uint32_t sz){
  for(uint32_t i=0;i<isz;i++)wr8(base+i,0);copy_bytes(base,f,hsz);
  for(uint16_t i=0;i<nsec;i++,sh+=40u){uint32_t va=rd32(sh+12u),vsz=rd32(sh+8u),raw=rd32(sh+20u),rawsz=rd32(sh+16u),mapped=vsz>rawsz?vsz:rawsz;if(va+mapped<va||va+mapped>isz||raw>sz||rawsz>sz-raw){x86_dll_last_error=9;return 0;}if(rawsz)copy_bytes(base+va,f+raw,rawsz);}
  if(!x86_dll_apply_relocs(base,isz,pref,rr,rs)){x86_dll_last_error=10;return 0;}
- uint32_t ok=0,bad=0; x86_dll_modules[slot]=(x86_dll_module_t){1u,base,isz,pref,entry,rr,rs,er,es,0,0,1u};
+ uint32_t ok=0,bad=0; x86_dll_modules[slot]=(x86_dll_module_t){0}; x86_dll_modules[slot].active=1u; x86_dll_modules[slot].base=base; x86_dll_modules[slot].size=isz; x86_dll_modules[slot].preferred=pref; x86_dll_modules[slot].entry=entry; x86_dll_modules[slot].reloc_rva=rr; x86_dll_modules[slot].reloc_size=rs; x86_dll_modules[slot].export_rva=er; x86_dll_modules[slot].export_size=es; x86_dll_modules[slot].refcount=1u;
  if(er&&er+40u<=isz){uint32_t modrva=rd32(base+er+12u);if(modrva<isz){uint32_t p=base+modrva,j=0;for(;j<95u&&j<sizeof(x86_dll_modules[slot].name)-1u&&MEM8(p+j);j++)x86_dll_modules[slot].name[j]=(char)MEM8(p+j);x86_dll_modules[slot].name[j]=0;}}
+ uint32_t rp=np,j=0;for(;j<95u&&j<sizeof(x86_dll_modules[slot].requested_name)-1u&&MEM8(rp+j);j++)x86_dll_modules[slot].requested_name[j]=(char)MEM8(rp+j);x86_dll_modules[slot].requested_name[j]=0;
  x86_dll_resolve_imports(base,isz,ir,is,&ok,&bad);x86_dll_modules[slot].imports_resolved=ok;x86_dll_modules[slot].imports_failed=bad;x86_dll_last_base=base;x86_dll_last_error=0;return slot+1;
 }
 static int x86_dll_register(uint32_t name,uint32_t data,uint32_t size){
