@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 BOOT_SOURCE = ROOT / "runtime" / "boot.c"
 BRIDGE_SOURCE = ROOT / "runtime" / "bridge.c"
 PACKER = ROOT / "packager" / "zwasm_pack.py"
+SAFE_IMAGE_BUILDER = ROOT / "tools" / "zwasm_safe_image_builder.py"
 
 
 def find_clang(explicit: str | None) -> str:
@@ -71,6 +72,7 @@ def main() -> int:
             root / "runtime.wasm",
             root / ".zwasm" / "runtime.wasm",
             ROOT / "runtime.wasm",
+            Path(r"C:\x86-to-wasm-packager\dist\x86-runtime-v0.9\runtime.wasm"),
         )
         boot = next((p for p in runtime_candidates if p.is_file()), generated / "boot.wasm")
         if boot == generated / "boot.wasm":
@@ -100,6 +102,15 @@ def main() -> int:
         print("[ZWASM] embedded guest PE: " + str(guest_copy))
     else:
         print("[ZWASM] WARNING: no PE guest found; runtime cannot launch an x86 executable.")
+
+    if image is None and guest is not None and SAFE_IMAGE_BUILDER.is_file():
+        generated_image = root / "zwasm_guest" / "image.bin"
+        subprocess.run([
+            sys.executable, str(SAFE_IMAGE_BUILDER),
+            str(guest), "-o", str(generated_image),
+        ], check=True)
+        image = generated_image
+        print("[ZWASM] generated safe guest image: " + str(image))
 
     output = args.output.resolve() if args.output else (
         ROOT / "dist" / (root.name.replace(" ", ".") + ".zgame")
