@@ -135,11 +135,69 @@ const XAPI_BUILTINS = {
   "kernel32!queryperformancecounter": (rt, s) => { rt.writeU64(s[0], Math.floor(performance.now() * 1000)); return 1; },
 };
 
+class ZDLLModule {
+  constructor(entry, manifest, instance) {
+    this.entry = entry;
+    this.manifest = manifest;
+    this.instance = instance;
+    this.exports = instance.exports;
+  }
+
+  call(exportName, id, args) {
+    const fn = this.exports[exportName || "zdll_call"];
+    if (typeof fn !== "function") throw new Error("zdll " + this.manifest.name + " lacks export " + (exportName || "zdll_call"));
+    const a = [id | 0, 0, 0, 0, 0];
+    for (let i = 0; i < Math.min(4, args.length); i++) a[i + 1] = args[i] | 0;
+    return fn(a[0], a[1], a[2], a[3], a[4]) | 0;
+  }
+}
+
+async function loadZDLL(reader, entry, hostApi) {
+  const bytes = await reader.readEntry(entry.path);
+  if (bytes.length < 64) throw new Error("zdll too small: " + entry.path);
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const magic = new TextDecoder().decode(bytes.slice(0, 8));
+  if (magic !== "ZDLLG01\\0") throw new Error("bad zdll magic: " + entry.path);
+  if (view.getUint32(8, true) !== 1) throw new Error("unsupported zdll version: " + entry.path);
+  const wasmOffset = Number(view.getBigUint64(16, true));
+  const wasmSize = Number(view.getBigUint64(24, true));
+  if (!Number.isSafeInteger(wasmOffset) || !Number.isSafeInteger(wasmSize) ||
+      wasmOffset < 64 || wasmOffset + wasmSize > bytes.length) {
+    throw new Error("invalid zdll bounds: " + entry.path);
+  }
+  const manifest = JSON.parse(new TextDecoder().decode(bytes.slice(64, wasmOffset)));
+  if (manifest.schema !== "zwasm.zdll/1" || manifest.abi !== "zworld.v1") {
+    throw new Error("unsupported zdll ABI: " + (manifest.name || entry.path));
+  }
+  const wasm = bytes.slice(wasmOffset, wasmOffset + wasmSize);
+  const digest = await crypto.subtle.digest("SHA-256", wasm);
+  const hash = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  if (hash !== String(manifest.sha256 || "").toLowerCase()) throw new Error("zdll hash mismatch: " + entry.path);
+  const module = await WebAssembly.compile(wasm);
+  let instance = null;
+  const imports = { env: {
+    z_host_api: (api, a0, a1, a2, a3) => hostApi(api | 0, a0 | 0, a1 | 0, a2 | 0, a3 | 0),
+  }};
+  const stubbed = ZWASMHost.fillMissingImports(WebAssembly, module, imports,
+    (name) => log("zdll import stub called: " + name));
+  if (stubbed.length) log("zdll " + (manifest.name || entry.path) + " imports not implemented: " + stubbed.join(", "));
+  instance = await WebAssembly.instantiate(module, imports);
+  if (typeof instance.exports.zdll_init === "function") {
+    const rc = instance.exports.zdll_init(1);
+    if ((rc | 0) !== 0) throw new Error("zdll_init failed for " + (manifest.name || entry.path) + ": " + rc);
+  }
+  if (typeof instance.exports.zdll_call !== "function") {
+    throw new Error("zdll " + (manifest.name || entry.path) + " must export zdll_call");
+  }
+  log("zdll loaded: " + (manifest.name || entry.path) + " · " + wasm.length + " bytes");
+  return new ZDLLModule(entry, manifest, instance);
+}
+
 class GuestRuntime {
   constructor(reader, module) {
     this.reader = reader; this.module = module; this.instance = null; this.memory = null;
     this.running = false; this.inputQueue = []; this.audio = null; this.ctx2d = null; this.imageData = null;
-    this.xapiTable = new Map(); this.xapiUnsupported = new Map(); this.diagShown = false;
+    this.xapiTable = new Map(); this.zapiTable = new Map(); this.zdlls = new Map(); this.xapiUnsupported = new Map(); this.diagShown = false;
     this.unresolved = new Map(); this.pendingFns = [];
   }
 
@@ -198,23 +256,85 @@ class GuestRuntime {
 
   xapiCall(id, argc) {
     state.bridge.calls++; state.bridge.lastApi = id;
-    const fn = this.xapiTable.get(id);
-    const key = fn ? (fn.lib + "!" + fn.name).toLowerCase() : null;
-    const handler = key ? XAPI_BUILTINS[key] : null;
+    const ex = this.instance.exports;
+    const slots = new Float64Array(ex.memory.buffer, ex.x86_xapi_slots(), 16);
+    const zfn = this.zapiTable.get(id >>> 0);
     let result = 0;
-    if (handler) {
-      const ex = this.instance.exports;
-      const slots = new Float64Array(ex.memory.buffer, ex.x86_xapi_slots(), 16);
-      try { result = handler(this, slots, fn) | 0; } catch (e) { log("xapi " + key + " threw: " + e.message); }
+    if (zfn) {
+      const dll = this.zdlls.get(zfn.dll);
+      if (!dll) {
+        state.bridge.unsupported++;
+        log("zapi missing zdll: " + zfn.dll + " for api " + id);
+      } else {
+        const args = [];
+        for (let i = 0; i < Math.min(argc | 0, zfn.argc, 4); i++) args.push(slots[i] | 0);
+        try { result = dll.call(zfn.export, id, args); }
+        catch (e) { log("zdll " + zfn.dll + " api " + id + " threw: " + e.message); result = -1; }
+      }
     } else {
-      state.bridge.unsupported++;
-      const label = key || ("id " + id);
-      const n = (this.xapiUnsupported.get(label) || 0) + 1;
-      this.xapiUnsupported.set(label, n);
-      if (n === 1) log("xapi unsupported: " + label + " (argc=" + argc + ") -> returning 0");
+      const fn = this.xapiTable.get(id);
+      const key = fn ? (fn.lib + "!" + fn.name).toLowerCase() : null;
+      const handler = key ? XAPI_BUILTINS[key] : null;
+      if (handler) {
+        try { result = handler(this, slots, fn) | 0; } catch (e) { log("legacy xapi " + key + " threw: " + e.message); result = -1; }
+      } else {
+        state.bridge.unsupported++;
+        const label = key || ("id " + id);
+        const n = (this.xapiUnsupported.get(label) || 0) + 1;
+        this.xapiUnsupported.set(label, n);
+        if (n === 1) log("api unsupported: " + label + " (argc=" + argc + ") -> returning 0");
+      }
     }
     state.bridge.lastResult = result;
     return result;
+  }
+
+  async loadZApis() {
+    for (const entry of ZWASMHost.findZapiEntries(this.reader.manifest)) {
+      const doc = JSON.parse(new TextDecoder().decode(await this.reader.readEntry(entry.path)));
+      if (doc.schema !== "zwasm.zapi/1" || doc.abi !== "zworld.v1" || doc.frame !== "i32x5") {
+        throw new Error("invalid zapi frame: " + entry.path);
+      }
+      const dllName = String(doc.dll || "");
+      if (!dllName) throw new Error("zapi has no dll: " + entry.path);
+      for (const fn of doc.functions || []) {
+        const id = fn.id >>> 0;
+        if (this.zapiTable.has(id)) throw new Error("duplicate zapi id " + id);
+        this.zapiTable.set(id, {
+          dll: String(fn.dll || dllName),
+          export: String(fn.export || "zdll_call"),
+          argc: Math.max(0, Math.min(4, fn.argc | 0)),
+          name: String(fn.name || ("api_" + id)),
+        });
+      }
+      log("zapi loaded: " + entry.path + " · " + (doc.functions || []).length + " functions");
+    }
+  }
+
+  async loadZDLLs() {
+    const entries = ZWASMHost.findZdllEntries(this.reader.manifest);
+    for (const entry of entries) {
+      const bytes = await this.reader.readEntry(entry.path);
+      const header = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      const name = JSON.parse(new TextDecoder().decode(bytes.slice(64, Number(header.getBigUint64(16, true))))).name;
+      const dll = await loadZDLL(this.reader, entry, (api, a0, a1, a2, a3) => {
+        state.bridge.calls++;
+        state.bridge.lastApi = api;
+        return this.zapiCallDirect(api, [a0, a1, a2, a3]);
+      });
+      const key = String(dll.manifest.name || name).toLowerCase();
+      if (this.zdlls.has(key)) throw new Error("duplicate zdll name: " + key);
+      this.zdlls.set(key, dll);
+    }
+    log("zdlls loaded: " + this.zdlls.size + "/" + entries.length);
+  }
+
+  zapiCallDirect(id, args) {
+    const fn = this.zapiTable.get(id >>> 0);
+    if (!fn) return -1;
+    const dll = this.zdlls.get(fn.dll.toLowerCase()) || this.zdlls.get(fn.dll);
+    if (!dll) return -1;
+    return dll.call(fn.export, id, args);
   }
 
   async loadXapiManifests() {
@@ -277,6 +397,8 @@ class GuestRuntime {
     if (dlls.length) log("dll rebind: unresolved imports=" + ex.x86_dll_rebind_imports());
     this.reportUnresolved();
 
+    await this.loadZApis();
+    await this.loadZDLLs();
     await this.loadXapiManifests();
     log("imports: " + ex.x86_get_import_resolved() + "/" + ex.x86_get_import_count() + " resolved, " + ex.x86_get_import_failed() + " failed · xapi functions: " + ex.x86_get_xapi_count());
 
