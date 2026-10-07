@@ -2643,7 +2643,7 @@ static void x86_dll_resolve_imports(uint32_t base,uint32_t size,uint32_t rva,uin
   for(uint32_t j=0;j<0x100000u;j++){uint32_t v=rd32(th+j*4u);if(!v)break;if(v&0x80000000u){wr32(iat+j*4u,API_UNRESOLVED_ORDINAL);if(bad)(*bad)++;continue;}if(v+2u>=size){if(bad)(*bad)++;break;}uint32_t t=x86_dll_resolve_import(base+nr,base+v+2u);if(t){wr32(iat+j*4u,t);if(ok)(*ok)++;}else{wr32(iat+j*4u,API_UNRESOLVED_BASE);if(bad)(*bad)++;}}
  }
 }
-static int x86_dll_load_image(uint32_t f,uint32_t sz){
+static int x86_dll_load_image(uint32_t f,uint32_t sz,uint32_t requested_name){
  if(sz<0x40u||rd16(f)!=0x5A4Du){x86_dll_last_error=1;return 0;}uint32_t pe=rd32(f+0x3Cu);
  if(pe+24u>sz||rd32(f+pe)!=0x4550u){x86_dll_last_error=2;return 0;}uint16_t mach=rd16(f+pe+4u),nsec=rd16(f+pe+6u),optsz=rd16(f+pe+20u),chars=rd16(f+pe+22u);
  if(mach!=0x14Cu||(chars&0x2000u)==0||optsz<224u){x86_dll_last_error=3;return 0;}uint32_t oh=f+pe+24u;if(oh+optsz>f+sz||rd16(oh)!=0x10Bu){x86_dll_last_error=4;return 0;}
@@ -2658,7 +2658,7 @@ static int x86_dll_load_image(uint32_t f,uint32_t sz){
  if(!x86_dll_apply_relocs(base,isz,pref,rr,rs)){x86_dll_last_error=10;return 0;}
  uint32_t ok=0,bad=0; x86_dll_modules[slot]=(x86_dll_module_t){0}; x86_dll_modules[slot].active=1u; x86_dll_modules[slot].base=base; x86_dll_modules[slot].size=isz; x86_dll_modules[slot].preferred=pref; x86_dll_modules[slot].entry=entry; x86_dll_modules[slot].reloc_rva=rr; x86_dll_modules[slot].reloc_size=rs; x86_dll_modules[slot].export_rva=er; x86_dll_modules[slot].export_size=es; x86_dll_modules[slot].refcount=1u;
  if(er&&er+40u<=isz){uint32_t modrva=rd32(base+er+12u);if(modrva<isz){uint32_t p=base+modrva,j=0;for(;j<95u&&j<sizeof(x86_dll_modules[slot].name)-1u&&MEM8(p+j);j++)x86_dll_modules[slot].name[j]=(char)MEM8(p+j);x86_dll_modules[slot].name[j]=0;}}
- uint32_t rp=np,j=0;for(;j<95u&&j<sizeof(x86_dll_modules[slot].requested_name)-1u&&MEM8(rp+j);j++)x86_dll_modules[slot].requested_name[j]=(char)MEM8(rp+j);x86_dll_modules[slot].requested_name[j]=0;
+ uint32_t rp=requested_name,j=0;for(;j<95u&&j<sizeof(x86_dll_modules[slot].requested_name)-1u&&MEM8(rp+j);j++)x86_dll_modules[slot].requested_name[j]=(char)MEM8(rp+j);x86_dll_modules[slot].requested_name[j]=0;
  x86_dll_resolve_imports(base,isz,ir,is,&ok,&bad);x86_dll_modules[slot].imports_resolved=ok;x86_dll_modules[slot].imports_failed=bad;x86_dll_last_base=base;x86_dll_last_error=0;return slot+1;
 }
 static int x86_dll_register(uint32_t name,uint32_t data,uint32_t size){
@@ -2669,7 +2669,7 @@ static int x86_dll_register(uint32_t name,uint32_t data,uint32_t size){
 }
 static uint32_t x86_dll_load_registered(uint32_t name){
  uint32_t np=x86_dll_basename_ptr(name);int li=x86_dll_find_loaded(np);if(li>=0){x86_dll_modules[li].refcount++;return x86_dll_modules[li].base;}
- for(uint32_t i=0;i<X86_DLL_MAX_RESOURCES;i++)if(x86_dll_resources[i].active&&x86_dll_name_equal(np,x86_dll_resources[i].name)){int slot=x86_dll_load_image(x86_dll_resources[i].data,x86_dll_resources[i].size);if(slot>0){x86_dll_rebind_all();return x86_dll_modules[slot-1].base;}return 0;}
+ for(uint32_t i=0;i<X86_DLL_MAX_RESOURCES;i++)if(x86_dll_resources[i].active&&x86_dll_name_equal(np,x86_dll_resources[i].name)){int slot=x86_dll_load_image(x86_dll_resources[i].data,x86_dll_resources[i].size,np);if(slot>0){x86_dll_rebind_all();return x86_dll_modules[slot-1].base;}return 0;}
  x86_dll_last_error=13;return 0;
 }
 static uint32_t x86_dll_module_for_name(uint32_t name){int i=x86_dll_find_loaded(x86_dll_basename_ptr(name));return i>=0?x86_dll_modules[i].base:0;}
