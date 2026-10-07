@@ -63,6 +63,8 @@ def main() -> int:
     p.add_argument("--image", type=Path)
     p.add_argument("--guest", type=Path, help="raw PE/guest executable to embed")
     p.add_argument("--trail", type=Path)
+    p.add_argument("--xapi", type=Path, action="append", default=[], help="xapi manifest (.xapi.json) to embed (repeatable)")
+    p.add_argument("--no-dlls", action="store_true", help="do not bundle top-level *.dll files next to the game")
     p.add_argument("--include-native", action="store_true")
     p.add_argument("--gzip", choices=("auto", "always", "never"), default="auto")
     args = p.parse_args()
@@ -99,21 +101,20 @@ def main() -> int:
     guest = args.guest.resolve() if args.guest else None
     if guest is None:
         exe_candidates = sorted(root.glob("*.exe"))
-        preferred = [p for p in exe_candidates if p.name.lower() in ("isaac.exe", "isaacng.exe", "game.exe")]
+        preferred = [p for p in exe_candidates if p.name.lower() in ("isaac-ng.exe", "isaac.exe", "isaacng.exe", "game.exe")]
         guest = preferred[0] if preferred else (exe_candidates[0] if len(exe_candidates) == 1 else None)
 
     if guest is not None:
-        guest_dir = root / "zwasm_guest"
-        guest_dir.mkdir(exist_ok=True)
-        guest_copy = guest_dir / "guest.pe"
-        if guest.resolve() != guest_copy.resolve():
-            shutil.copy2(guest, guest_copy)
-        print("[ZWASM] embedded guest PE: " + str(guest_copy))
+        print("[ZWASM] guest PE: " + str(guest))
     else:
-        print("[ZWASM] WARNING: no PE guest found; runtime cannot launch an x86 executable.")
+        print("[ZWASM] WARNING: no PE guest found (pass --guest); runtime cannot launch an x86 executable.")
+
+    dlls = [] if args.no_dlls else sorted(root.glob("*.dll"), key=lambda p: p.name.lower())
+    if dlls:
+        print("[ZWASM] bundled guest DLLs: " + ", ".join(p.name for p in dlls))
 
     if image is None and guest is not None and SAFE_IMAGE_BUILDER.is_file():
-        generated_image = root / "zwasm_guest" / "image.bin"
+        generated_image = generated / "image.bin"
         subprocess.run([
             sys.executable, str(SAFE_IMAGE_BUILDER),
             str(guest), "-o", str(generated_image),
@@ -132,6 +133,12 @@ def main() -> int:
     ]
     if image:
         cmd += ["--image", str(image)]
+    if guest is not None:
+        cmd += ["--guest", str(guest)]
+    for dll in dlls:
+        cmd += ["--guest-dll", str(dll)]
+    for xapi in args.xapi:
+        cmd += ["--xapi", str(xapi.resolve())]
     if args.trail:
         cmd += ["--trail", str(args.trail.resolve())]
     if args.include_native:
