@@ -1,7 +1,7 @@
 // XWASM X86 Runtime v0.9
 #include <stdint.h>
 
-extern void xwasm_log(int32_t level,int32_t ptr,int32_t len);
+extern void z_host_log(int32_t level,int32_t ptr,int32_t len);
 #define HEAP_BASE_FALLBACK 0x100000u
 extern unsigned char __heap_base[];
 #define IMAGE_BASE 0x00400000u
@@ -305,14 +305,14 @@ enum { X86_DISPATCH_NONE=0, X86_DISPATCH_INC_R32=1, X86_DISPATCH_DEC_R32=2, X86_
 #define API_C5_REG_SET (API_BASE+0x00010020u)
 #define API_C5_REG_CLOSE (API_BASE+0x00010024u)
 #define API_C5_REG_HKEY_CURRENT_USER 0x80000001u
-extern int32_t xwasm_input_poll(int32_t msg_ptr,int32_t remove);
-extern void xwasm_input_quit(void);
-extern void xwasm_audio_beep(int32_t frequency,int32_t duration_ms);
-extern void xwasm_gfx_create(int32_t width,int32_t height);
-extern void xwasm_gfx_clear(int32_t color);
-extern void xwasm_gfx_pixel(int32_t x,int32_t y,int32_t color);
-extern void xwasm_gfx_rect(int32_t left,int32_t top,int32_t right,int32_t bottom,int32_t color);
-extern void xwasm_gfx_present(void);
+extern int32_t z_host_input_poll(int32_t msg_ptr,int32_t remove);
+extern void z_host_input_quit(void);
+extern void z_host_audio_beep(int32_t frequency,int32_t duration_ms);
+extern void z_host_gfx_create(int32_t width,int32_t height);
+extern void z_host_gfx_clear(int32_t color);
+extern void z_host_gfx_pixel(int32_t x,int32_t y,int32_t color);
+extern void z_host_gfx_rect(int32_t left,int32_t top,int32_t right,int32_t bottom,int32_t color);
+extern void z_host_gfx_present(void);
 
 /* v0.9 memory allocator state must precede the region helpers that use it. */
 static uint32_t guest_vm=0x02000000u;
@@ -941,7 +941,7 @@ static int x87_push(double v);
 #define XAPI_MAX_ALIASES 128u
 #define XAPI_POOL_SIZE 98304u
 #define XAPI_SLOT_RET 15u
-extern int32_t xwasm_xapi_call(int32_t id,int32_t argc);
+extern int32_t z_host_xapi_call(int32_t id,int32_t argc);
 typedef struct{uint32_t id,lib_off,name_off,calls;uint8_t abi,nargs,ret,args[16];}x86_xapi_fn_t;
 static x86_xapi_fn_t xapi_fn[XAPI_MAX_FUNCS];
 static uint32_t xapi_count=0,xapi_pool_used=0,xapi_alias_count=0,xapi_duplicate_count=0,
@@ -984,7 +984,7 @@ static uint32_t xapi_call(uint32_t idx){
  }
  xapi_slots[XAPI_SLOT_RET]=0.0;
  xapi_last_id=f->id;xapi_last_idx=idx;f->calls++;
- int32_t r=xwasm_xapi_call((int32_t)f->id,(int32_t)f->nargs);
+ int32_t r=z_host_xapi_call((int32_t)f->id,(int32_t)f->nargs);
  if(f->ret==4||f->ret==5){if(!x87_push(xapi_slots[XAPI_SLOT_RET]))return 0;}
  else regs[R_EAX]=(uint32_t)r;
  if(f->abi==0)regs[R_ESP]+=off;
@@ -1157,7 +1157,7 @@ static uint32_t resolve_builtin(uint32_t dll,uint32_t name){
   if(streq_ascii(name,"GetTickCount"))return API_GETTICKCOUNT;
  }
  if(streq_ascii(dll,"XWASMHOST.dll")||streq_ascii(dll,"xwasmhost.dll")){
-  if(streq_ascii(name,"xwasm_log"))return API_XWASM_LOG;
+  if(streq_ascii(name,"z_host_log"))return API_XWASM_LOG;
  }
  if(streq_ascii(dll,"KERNEL32.dll")||streq_ascii(dll,"kernel32.dll")){
   if(streq_ascii(name,"VirtualAlloc"))return API_VIRTUALALLOC;
@@ -1330,7 +1330,7 @@ static void gl_draw_triangle(void){
   int32_t w0=(x1-x0)*(y-y0)-(y1-y0)*(x-x0);
   int32_t w1=(x2-x1)*(y-y1)-(y2-y1)*(x-x1);
   int32_t w2=(x0-x2)*(y-y2)-(y0-y2)*(x-x2);
-  if((area>0&&w0>=0&&w1>=0&&w2>=0)||(area<0&&w0<=0&&w1<=0&&w2<=0))xwasm_gfx_pixel(x,y,(int32_t)color);
+  if((area>0&&w0>=0&&w1>=0&&w2>=0)||(area<0&&w0<=0&&w1<=0&&w2<=0))z_host_gfx_pixel(x,y,(int32_t)color);
  }
 }
 
@@ -1354,7 +1354,7 @@ static uint32_t call_builtin(uint32_t target){
  if(target==API_C5_REG_CLOSE){uint32_t sp=regs[R_ESP];regs[R_EAX]=x86_reg_close_impl(rd32(sp+4u));return 1;}
  if(target==API_GETTICKCOUNT){regs[R_EAX]=1234u;return 1;}
  if(target==API_XWASM_LOG){
-  xwasm_log(1,(int32_t)regs[R_ECX],(int32_t)regs[R_EDX]);
+  z_host_log(1,(int32_t)regs[R_ECX],(int32_t)regs[R_EDX]);
   return 1;
  }
  if(target==API_VIRTUALALLOC){
@@ -1375,9 +1375,9 @@ static uint32_t call_builtin(uint32_t target){
   if(width<64u||width>1920u)width=640u;
   if(height<64u||height>1080u)height=360u;
   surface_width=width; surface_height=height;
-  xwasm_gfx_create((int32_t)width,(int32_t)height);
-  xwasm_gfx_clear(0x00101820);
-  xwasm_gfx_present();
+  z_host_gfx_create((int32_t)width,(int32_t)height);
+  z_host_gfx_clear(0x00101820);
+  z_host_gfx_present();
   regs[R_EAX]=1u; regs[R_ESP]+=48u; return 1;
  }
  if(target==API_USER32_SHOWWINDOW){ regs[R_EAX]=1u; regs[R_ESP]+=8u; return 1; }
@@ -1385,22 +1385,22 @@ static uint32_t call_builtin(uint32_t target){
  if(target==API_USER32_RELEASEDC){ regs[R_EAX]=1u; regs[R_ESP]+=8u; return 1; }
  if(target==API_GDI32_SETPIXEL){
   uint32_t sp=regs[R_ESP]; uint32_t hdc=rd32(sp+4u),x=rd32(sp+8u),y=rd32(sp+12u),color=rd32(sp+16u);
-  if(hdc) xwasm_gfx_pixel((int32_t)x,(int32_t)y,(int32_t)color); xwasm_gfx_present(); regs[R_EAX]=color; regs[R_ESP]+=16u; return 1;
+  if(hdc) z_host_gfx_pixel((int32_t)x,(int32_t)y,(int32_t)color); z_host_gfx_present(); regs[R_EAX]=color; regs[R_ESP]+=16u; return 1;
  }
  if(target==API_OPENGL32_WGLSHARELISTS){regs[R_EAX]=1u;regs[R_ESP]+=8u;return 1;}
  if(target==API_OPENGL32_WGLGETPROCADDRESS){uint32_t sp=regs[R_ESP];regs[R_EAX]=opengl_proc_target(rd32(sp+4u));regs[R_ESP]+=4u;return 1;}
  if(target==API_OPENGL32_WGLCREATECONTEXT){regs[R_EAX]=gl_context;regs[R_ESP]+=4u;return 1;}
  if(target==API_OPENGL32_WGLDELETECONTEXT){uint32_t sp=regs[R_ESP];if(rd32(sp+4u)==gl_current_context)gl_current_context=0;regs[R_EAX]=1u;regs[R_ESP]+=4u;return 1;}
- if(target==API_OPENGL32_WGLMAKECURRENT){uint32_t sp=regs[R_ESP];uint32_t hdc=rd32(sp+4u),ctx=rd32(sp+8u);gl_current_context=ctx?ctx:0;if(hdc&&ctx)xwasm_gfx_create((int32_t)surface_width,(int32_t)surface_height);regs[R_EAX]=1u;regs[R_ESP]+=8u;return 1;}
+ if(target==API_OPENGL32_WGLMAKECURRENT){uint32_t sp=regs[R_ESP];uint32_t hdc=rd32(sp+4u),ctx=rd32(sp+8u);gl_current_context=ctx?ctx:0;if(hdc&&ctx)z_host_gfx_create((int32_t)surface_width,(int32_t)surface_height);regs[R_EAX]=1u;regs[R_ESP]+=8u;return 1;}
  if(target==API_OPENGL32_WGLGETCURRENTCONTEXT){regs[R_EAX]=gl_current_context;return 1;}
  if(target==API_OPENGL32_GLCLEARCOLOR){uint32_t sp=regs[R_ESP];union{uint32_t u;float f;}a,b,d,e;a.u=rd32(sp+4u);b.u=rd32(sp+8u);d.u=rd32(sp+12u);e.u=rd32(sp+16u);gl_clear_r=a.f;gl_clear_g=b.f;gl_clear_b=d.f;gl_clear_a=e.f;regs[R_ESP]+=16u;return 1;}
- if(target==API_OPENGL32_GLCLEAR){uint32_t sp=regs[R_ESP];if(rd32(sp+4u)&0x00004000u)xwasm_gfx_clear((int32_t)gl_clear_u32());regs[R_ESP]+=4u;return 1;}
+ if(target==API_OPENGL32_GLCLEAR){uint32_t sp=regs[R_ESP];if(rd32(sp+4u)&0x00004000u)z_host_gfx_clear((int32_t)gl_clear_u32());regs[R_ESP]+=4u;return 1;}
  if(target==API_OPENGL32_GLVIEWPORT){uint32_t sp=regs[R_ESP];gl_viewport_x=(int32_t)rd32(sp+4u);gl_viewport_y=(int32_t)rd32(sp+8u);gl_viewport_w=(int32_t)rd32(sp+12u);gl_viewport_h=(int32_t)rd32(sp+16u);regs[R_ESP]+=16u;return 1;}
  if(target==API_OPENGL32_GLBEGIN){uint32_t sp=regs[R_ESP];gl_begin_mode=rd32(sp+4u);gl_vertex_count=0;gl_mode=1;regs[R_ESP]+=4u;return 1;}
- if(target==API_OPENGL32_GLEND){gl_mode=0;if(gl_begin_mode==0x0004u)gl_draw_triangle();xwasm_gfx_present();return 1;}
+ if(target==API_OPENGL32_GLEND){gl_mode=0;if(gl_begin_mode==0x0004u)gl_draw_triangle();z_host_gfx_present();return 1;}
  if(target==API_OPENGL32_GLCOLOR3F||target==API_OPENGL32_GLCOLOR4F){uint32_t sp=regs[R_ESP];union{uint32_t u;float f;}a,b,d,e;a.u=rd32(sp+4u);b.u=rd32(sp+8u);d.u=rd32(sp+12u);gl_color_r=a.f;gl_color_g=b.f;gl_color_b=d.f;if(target==API_OPENGL32_GLCOLOR4F){e.u=rd32(sp+16u);gl_color_a=e.f;regs[R_ESP]+=16u;}else regs[R_ESP]+=12u;return 1;}
  if(target==API_OPENGL32_GLVERTEX2F||target==API_OPENGL32_GLVERTEX3F){uint32_t sp=regs[R_ESP];if(gl_mode&&gl_vertex_count<64u){union{uint32_t u;float f;}a,b,d;a.u=rd32(sp+4u);b.u=rd32(sp+8u);d.u=(target==API_OPENGL32_GLVERTEX3F)?rd32(sp+12u):0;gl_vertices[gl_vertex_count][0]=a.f;gl_vertices[gl_vertex_count][1]=b.f;gl_vertices[gl_vertex_count][2]=d.f;gl_vertex_count++;}regs[R_ESP]+=(target==API_OPENGL32_GLVERTEX3F?12u:8u);return 1;}
- if(target==API_OPENGL32_GLFLUSH||target==API_OPENGL32_GLFINISH){xwasm_gfx_present();return 1;}
+ if(target==API_OPENGL32_GLFLUSH||target==API_OPENGL32_GLFINISH){z_host_gfx_present();return 1;}
  if(target==API_OPENGL32_GLENABLE||target==API_OPENGL32_GLDISABLE||target==API_OPENGL32_GLDEPTHFUNC||target==API_OPENGL32_GLDEPTHMASK||target==API_OPENGL32_GLMATRIXMODE){regs[R_ESP]+=4u;return 1;}
  if(target==API_OPENGL32_GLBLENDFUNC){regs[R_ESP]+=8u;return 1;}
  if(target==API_OPENGL32_GLLINEWIDTH||target==API_OPENGL32_GLPOINTSIZE){regs[R_ESP]+=4u;return 1;}
@@ -1410,19 +1410,19 @@ static uint32_t call_builtin(uint32_t target){
  if(target==API_OPENGL32_GLTRANSLATEF||target==API_OPENGL32_GLSCALEF){regs[R_ESP]+=12u;return 1;}
  if(target==API_OPENGL32_GLROTATEF){regs[R_ESP]+=16u;return 1;}
  if(target==API_OPENGL32_GLGETSTRING){uint32_t sp=regs[R_ESP],name=rd32(sp+4u);const char *s="XWASM OpenGL";if(name==0x1F00u)s="XWASM";else if(name==0x1F01u)s="XWASM WebGL-compatible renderer";else if(name==0x1F02u)s="1.1 XWASM compatibility";uint32_t p=guest_alloc_raw(64u);if(p){uint32_t i=0;while(s[i]){wr8(p+i,(uint8_t)s[i]);i++;}wr8(p+i,0);}regs[R_EAX]=p;regs[R_ESP]+=4u;return 1;}
- if(target==API_GDI32_SWAPBUFFERS){xwasm_gfx_present();regs[R_EAX]=1u;regs[R_ESP]+=4u;return 1;}
+ if(target==API_GDI32_SWAPBUFFERS){z_host_gfx_present();regs[R_EAX]=1u;regs[R_ESP]+=4u;return 1;}
  if(target==API_GDI32_CHOOSEPIXELFORMAT){regs[R_EAX]=1u;regs[R_ESP]+=8u;return 1;}
  if(target==API_GDI32_SETPIXELFORMAT){regs[R_EAX]=1u;regs[R_ESP]+=12u;return 1;}
  if(target==API_GDI32_RECTANGLE){
   uint32_t sp=regs[R_ESP]; uint32_t hdc=rd32(sp+4u),left=rd32(sp+8u),top=rd32(sp+12u),right=rd32(sp+16u),bottom=rd32(sp+20u);
-  if(hdc) xwasm_gfx_rect((int32_t)left,(int32_t)top,(int32_t)right,(int32_t)bottom,0x00FFFFFF); xwasm_gfx_present(); regs[R_EAX]=1u; regs[R_ESP]+=20u; return 1;
+  if(hdc) z_host_gfx_rect((int32_t)left,(int32_t)top,(int32_t)right,(int32_t)bottom,0x00FFFFFF); z_host_gfx_present(); regs[R_EAX]=1u; regs[R_ESP]+=20u; return 1;
  }
  if(target==API_USER32_GETMESSAGEA || target==API_USER32_PEEKMESSAGEA){
   /* 32-bit MSG: hwnd, message, wParam, lParam, time, pt.x, pt.y. */
   uint32_t sp=regs[R_ESP],msg=rd32(sp+4u);
   /* PeekMessageA(MSG*, hWnd, min, max, removeMsg): removeMsg is arg 5. */
   uint32_t remove=target==API_USER32_GETMESSAGEA?1u:rd32(sp+20u);
-  int32_t got=xwasm_input_poll((int32_t)msg,(int32_t)remove);
+  int32_t got=z_host_input_poll((int32_t)msg,(int32_t)remove);
   if(got>0){
    message_count++; message_last=rd32(msg+4u);
    if(message_last==0x0012u)message_quit=1;
@@ -1446,10 +1446,10 @@ static uint32_t call_builtin(uint32_t target){
    if(type==0x0201u){
     int32_t x=(int16_t)(lp&0xFFFFu),y=(int16_t)((lp>>16)&0xFFFFu);
     mouse_clicks++;
-    xwasm_gfx_rect(x-4,y-4,x+5,y+5,0x0000FF00);
-    xwasm_gfx_pixel(x,y,0x00FFFFFF);
-    xwasm_gfx_present();
-    xwasm_audio_beep(880,70);
+    z_host_gfx_rect(x-4,y-4,x+5,y+5,0x0000FF00);
+    z_host_gfx_pixel(x,y,0x00FFFFFF);
+    z_host_gfx_present();
+    z_host_audio_beep(880,70);
    }
   }
   regs[R_EAX]=0u; regs[R_ESP]+=4u; return 1;
@@ -1458,7 +1458,7 @@ static uint32_t call_builtin(uint32_t target){
   regs[R_EAX]=0u; regs[R_ESP]+=16u; return 1;
  }
  if(target==API_USER32_POSTQUITMESSAGE){
-  message_quit=1; xwasm_input_quit(); regs[R_ESP]+=4u; return 1;
+  message_quit=1; z_host_input_quit(); regs[R_ESP]+=4u; return 1;
  }
  if(target==API_USER32_GETCLIENTRECT){
   uint32_t sp=regs[R_ESP],rect=rd32(sp+8u);
@@ -1466,10 +1466,10 @@ static uint32_t call_builtin(uint32_t target){
   regs[R_EAX]=rect?1u:0u; regs[R_ESP]+=8u; return 1;
  }
  if(target==API_USER32_INVALIDATERECT){
-  regs[R_EAX]=1u; regs[R_ESP]+=12u; xwasm_gfx_present(); return 1;
+  regs[R_EAX]=1u; regs[R_ESP]+=12u; z_host_gfx_present(); return 1;
  }
  if(target==API_USER32_UPDATEWINDOW){
-  regs[R_EAX]=1u; regs[R_ESP]+=4u; xwasm_gfx_present(); return 1;
+  regs[R_EAX]=1u; regs[R_ESP]+=4u; z_host_gfx_present(); return 1;
  }
  if(target==API_KERNEL32_CREATEFILEA){
   uint32_t sp=regs[R_ESP],path=rd32(sp+4u),access=rd32(sp+8u),creation=rd32(sp+20u);char raw[X86_FS_MAX_PATH];
@@ -1532,7 +1532,7 @@ static uint32_t call_builtin(uint32_t target){
  if(target==API_KERNEL32_SETLASTERROR){uint32_t sp=regs[R_ESP];crt_last_error=rd32(sp+4u);regs[R_ESP]+=4u;return 1;}
  if(target==API_KERNEL32_BEEP){
   uint32_t sp=regs[R_ESP],freq=rd32(sp+4u),duration=rd32(sp+8u);
-  xwasm_audio_beep((int32_t)freq,(int32_t)duration);
+  z_host_audio_beep((int32_t)freq,(int32_t)duration);
   regs[R_EAX]=1u; regs[R_ESP]+=8u; return 1;
  }
  if(target==API_VIRTUALFREE){
@@ -1555,8 +1555,8 @@ static void wr32(uint32_t p,uint32_t v){MEM8(p)=(uint8_t)v;MEM8(p+1)=(uint8_t)(v
 static void wr16(uint32_t p,uint16_t v){MEM8(p)=(uint8_t)v;MEM8(p+1)=(uint8_t)(v>>8);}
 static void wr8(uint32_t p,uint8_t v){MEM8(p)=v;}
 static void copy_bytes(uint32_t d,uint32_t s,uint32_t n){for(uint32_t i=0;i<n;i++)wr8(d+i,MEM8(s+i));}
-static void loglit(const char*s){uint32_t p=heap;while(*s)wr8(p++,(uint8_t)*s++);xwasm_log(1,(int32_t)heap,(int32_t)(p-heap));heap=al4(p+1);}
-static void loghex(const char*s,uint32_t v){uint32_t p=heap;while(*s)wr8(p++,(uint8_t)*s++);wr8(p++,'0');wr8(p++,'x');for(int i=7;i>=0;i--){uint8_t x=(v>>(i*4))&15u;wr8(p++,(uint8_t)(x<10?'0'+x:'A'+x-10));}xwasm_log(1,(int32_t)heap,(int32_t)(p-heap));heap=al4(p+1);}
+static void loglit(const char*s){uint32_t p=heap;while(*s)wr8(p++,(uint8_t)*s++);z_host_log(1,(int32_t)heap,(int32_t)(p-heap));heap=al4(p+1);}
+static void loghex(const char*s,uint32_t v){uint32_t p=heap;while(*s)wr8(p++,(uint8_t)*s++);wr8(p++,'0');wr8(p++,'x');for(int i=7;i>=0;i--){uint8_t x=(v>>(i*4))&15u;wr8(p++,(uint8_t)(x<10?'0'+x:'A'+x-10));}z_host_log(1,(int32_t)heap,(int32_t)(p-heap));heap=al4(p+1);}
 
 static void set_logic_flags(uint32_t v){
  uint32_t p=v; p^=p>>4; p^=p>>2; p^=p>>1;
@@ -2534,8 +2534,8 @@ static void scan_imports(void){
     uint32_t dl=0,fn=0;
     while(dl<255u&&MEM8(image_base+name_rva+dl))dl++;
     while(fn<255u&&MEM8(image_base+v+2u+fn))fn++;
-    xwasm_log(2,(int32_t)(image_base+name_rva),(int32_t)dl);
-    xwasm_log(2,(int32_t)(image_base+v+2u),(int32_t)fn);
+    z_host_log(2,(int32_t)(image_base+name_rva),(int32_t)dl);
+    z_host_log(2,(int32_t)(image_base+v+2u),(int32_t)fn);
    }
   }
   (void)resolved_this_dll;
@@ -2716,7 +2716,7 @@ x86_trace_reset();x86_profile_clear();
  return 0;
 }
 
-__attribute__((export_name("xwasm_init"))) int xwasm_init(void){
+__attribute__((export_name("zwasm_init"))) int zwasm_init(void){
  crt_errno=0;crt_last_error=0;crt_started=1;crt_exited=0;crt_exit_code=0;
  crt_last_termination_kind=0u;crt_last_termination_caller=0u;crt_last_termination_return_eip=0u;
  crt_last_termination_target=0u;crt_last_termination_arg0=0u;
