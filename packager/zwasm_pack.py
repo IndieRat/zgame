@@ -193,6 +193,7 @@ def build(args: argparse.Namespace) -> Path:
     guest_package: str | None = None
     guest_dll_packages: list[str] = []
     xapi_packages: list[str] = []
+    zdll_packages: list[str] = []
     extra_roles: list[tuple[str, Path, str]] = []
     if args.guest:
         guest_path = Path(args.guest).resolve()
@@ -280,7 +281,7 @@ def build(args: argparse.Namespace) -> Path:
             "trail": trail_package,
             "guest": guest_package,
             "guestDlls": guest_dll_packages,
-            "xapi": xapi_packages,
+            "xapi": xapi_packages,\n            "zdlls": zdll_packages,
             "entries": entries,
         }
 
@@ -348,7 +349,7 @@ def build(args: argparse.Namespace) -> Path:
     print("[ZWASM] boot:    " + (manifest["boot"] or "(none)"))
     print("[ZWASM] image:   " + (manifest["image"] or "(none)"))
     print("[ZWASM] guest:   " + (manifest["guest"] or "(none)"))
-    print("[ZWASM] dlls:    " + str(len(manifest["guestDlls"])))
+    print("[ZWASM] dlls:    " + str(len(manifest["guestDlls"])))\n    print("[ZWASM] zdlls:   " + str(len(manifest["zdlls"])))
     return output
 
 def parse_args() -> argparse.Namespace:
@@ -362,7 +363,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--trail", help="boot trail JSON to embed")
     p.add_argument("--guest", help="PE32 game executable to embed as zwasm_guest/guest.pe")
     p.add_argument("--guest-dll", action="append", default=[], help="bundled guest DLL (repeatable)")
-    p.add_argument("--xapi", action="append", default=[], help="xapi manifest to embed (repeatable)")
+    p.add_argument("--xapi", action="append", default=[], help="xapi manifest to embed (repeatable)")\n    p.add_argument("--zdll", action="append", default=[], help="ZWASM WASM DLL container to embed (repeatable)")
     p.add_argument("--exclude", action="append", default=[], help="glob to exclude")
     p.add_argument(
         "--include-native",
