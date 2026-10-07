@@ -89,6 +89,10 @@ uint32_t x86_crt_exit(uint32_t code);
 static uint32_t requested_image_base=0,reloc_rva=0,reloc_size=0,import_rva=0,import_size=0;
 static uint32_t relocation_needed=0,dll_count=0,import_count=0,load_error=0,last_load_ptr=0,last_load_size=0;
 static uint32_t regs[8],eflags=0x00000002u;
+#define X86_FLOW_DEPTH 32u
+static uint32_t x86_flow_head=0,x86_flow_count=0;
+static uint32_t x86_flow_eip[X86_FLOW_DEPTH],x86_flow_esp[X86_FLOW_DEPTH],x86_flow_ebp[X86_FLOW_DEPTH],x86_flow_opcode[X86_FLOW_DEPTH];
+static void x86_flow_note(uint32_t at,uint32_t op){uint32_t i=x86_flow_head%X86_FLOW_DEPTH;x86_flow_eip[i]=at;x86_flow_esp[i]=regs[R_ESP];x86_flow_ebp[i]=regs[R_EBP];x86_flow_opcode[i]=op;x86_flow_head=(x86_flow_head+1u)%X86_FLOW_DEPTH;if(x86_flow_count<X86_FLOW_DEPTH)x86_flow_count++;}
 /* Minimal x87 state. Values are kept as host doubles for the first compiler-coverage milestone; memory loads/stores still round through IEEE binary32/binary64 formats. */
 static double x87_stack[8];
 static uint32_t x87_count=0;
@@ -2768,7 +2772,7 @@ __attribute__((export_name("zwasm_init"))) int zwasm_init(void){
   * CRT startup, and clearing them made every bundled DLL disappear just before
   * import rebinding (dll_count=0, followed by hundreds of false unresolved imports). */
 
- heap=al4((uint32_t)(uintptr_t)__heap_base);guest_heap=GUEST_HEAP_BASE;x86_mem_reset();guest_vm=0x02000000u;last_virtual_alloc=0;last_virtual_alloc_size=0;virtual_free_count=0;loaded=0;requested_image_base=0;reloc_rva=reloc_size=import_rva=import_size=0;relocation_needed=0;dll_count=0;import_count=0;steps=0;load_error=0;halted=0;cpu_error=0;eflags=0x2;surface_width=640;surface_height=360;
+ heap=al4((uint32_t)(uintptr_t)__heap_base);x86_flow_head=0;x86_flow_count=0;guest_heap=GUEST_HEAP_BASE;x86_mem_reset();guest_vm=0x02000000u;last_virtual_alloc=0;last_virtual_alloc_size=0;virtual_free_count=0;loaded=0;requested_image_base=0;reloc_rva=reloc_size=import_rva=import_size=0;relocation_needed=0;dll_count=0;import_count=0;steps=0;load_error=0;halted=0;cpu_error=0;eflags=0x2;surface_width=640;surface_height=360;
  for(int i=0;i<8;i++)regs[i]=0; decoded_prefixes=0;decoded_operand16=0; last_decoded_map=0;last_decoded_opcode=0;last_decoded_length=0;last_decoded_modrm=0;last_decoded_has_modrm=0;last_dispatch_id=0;last_dispatch_count=0;last_indirect_slot=0;last_indirect_target=0;last_unresolved_gdr=0xFFFFFFFFu;x86_trace_reset();x86_profile_clear(); message_count=0;message_last=0;message_quit=0;mouse_clicks=0;mouse_right_clicks=0;mouse_middle_clicks=0;mouse_moves=0;
 loglit("XWASM X86 Runtime v0.9");
 loglit("PE32 + decoder CPU + guest memory regions + USER32/GDI32 + browser window/message/input + audio bridge");return 0;
@@ -2802,6 +2806,11 @@ __attribute__((export_name("x86_run"))) int x86_run(int32_t max_steps){
  return halted?1:0;
 }
 __attribute__((export_name("x86_get_eip"))) uint32_t x86_get_eip(void){return eip;}
+__attribute__((export_name("x86_get_flow_count"))) uint32_t x86_get_flow_count(void){return x86_flow_count;}
+__attribute__((export_name("x86_get_flow_eip"))) uint32_t x86_get_flow_eip(uint32_t i){if(i>=x86_flow_count)return 0;return x86_flow_eip[(x86_flow_head+x86_flow_count-1u-i)%X86_FLOW_DEPTH];}
+__attribute__((export_name("x86_get_flow_esp"))) uint32_t x86_get_flow_esp(uint32_t i){if(i>=x86_flow_count)return 0;return x86_flow_esp[(x86_flow_head+x86_flow_count-1u-i)%X86_FLOW_DEPTH];}
+__attribute__((export_name("x86_get_flow_ebp"))) uint32_t x86_get_flow_ebp(uint32_t i){if(i>=x86_flow_count)return 0;return x86_flow_ebp[(x86_flow_head+x86_flow_count-1u-i)%X86_FLOW_DEPTH];}
+__attribute__((export_name("x86_get_flow_opcode"))) uint32_t x86_get_flow_opcode(uint32_t i){if(i>=x86_flow_count)return 0;return x86_flow_opcode[(x86_flow_head+x86_flow_count-1u-i)%X86_FLOW_DEPTH];}
 __attribute__((export_name("x86_get_steps"))) uint32_t x86_get_steps(void){return steps;}
 __attribute__((export_name("x86_get_eax"))) uint32_t x86_get_eax(void){return regs[R_EAX];}
 __attribute__((export_name("x86_get_ecx"))) uint32_t x86_get_ecx(void){return regs[R_ECX];}
