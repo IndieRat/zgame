@@ -2590,7 +2590,7 @@ static uint32_t x86_dll_last_error=0,x86_dll_last_base=0;
 static int x86_dll_cname_equal(const char*a,const char*b){uint32_t i=0;if(!a||!b)return 0;while(a[i]&&b[i]){char x=a[i],y=b[i];if(x>='A'&&x<='Z')x=(char)(x-'A'+'a');if(y>='A'&&y<='Z')y=(char)(y-'A'+'a');if(x!=y)return 0;i++;}return a[i]==0&&b[i]==0;}
 static int x86_dll_name_equal(uint32_t p,const char*n){uint32_t i=0;if(!p||!n)return 0;while(n[i]){char a=(char)MEM8(p+i),b=n[i];if(a>='A'&&a<='Z')a=(char)(a-'A'+'a');if(b>='A'&&b<='Z')b=(char)(b-'A'+'a');if(a!=b)return 0;i++;}return MEM8(p+i)==0;}
 static uint32_t x86_dll_basename_ptr(uint32_t p){uint32_t last=p;if(!p)return 0;for(uint32_t i=0;i<256u&&MEM8(p+i);i++)if(MEM8(p+i)=='/'||MEM8(p+i)=='\\')last=p+i+1u;return last;}
-static int x86_dll_find_loaded(uint32_t p){for(uint32_t i=0;i<X86_DLL_MAX_MODULES;i++)if(x86_dll_modules[i].active&&(x86_dll_name_equal(p,x86_dll_modules[i].name)||x86_dll_cname_equal((const char *)(uintptr_t)p,x86_dll_modules[i].requested_name)))return (int)i;return -1;}
+static int x86_dll_find_loaded(uint32_t p){for(uint32_t i=0;i<X86_DLL_MAX_MODULES;i++)if(x86_dll_modules[i].active&&(x86_dll_name_equal(p,x86_dll_modules[i].name)||x86_dll_name_equal(p,x86_dll_modules[i].requested_name)))return (int)i;return -1;}
 static int x86_dll_guest_name_equal(uint32_t a,uint32_t b){uint32_t i=0;if(!a||!b)return 0;while(MEM8(a+i)&&MEM8(b+i)){char x=(char)MEM8(a+i),y=(char)MEM8(b+i);if(x>='A'&&x<='Z')x=(char)(x-'A'+'a');if(y>='A'&&y<='Z')y=(char)(y-'A'+'a');if(x!=y)return 0;i++;}return MEM8(a+i)==0&&MEM8(b+i)==0;}
 static int x86_dll_apply_relocs(uint32_t base,uint32_t size,uint32_t preferred,uint32_t rva,uint32_t rsz){
  if(base==preferred)return 1;if(!rva||!rsz||rva>size||rsz>size-rva)return 0;
