@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build boot.wasm with clang, then package a directory as .zgame."""
+"""Build a self-contained ZWASM .zgame with a vendored x86 runtime."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 BOOT_SOURCE = ROOT / "runtime" / "boot.c"
 BRIDGE_SOURCE = ROOT / "runtime" / "bridge.c"
+X86_RUNTIME_SOURCE = ROOT / "runtime" / "x86" / "runtime.c"
 PACKER = ROOT / "packager" / "zwasm_pack.py"
 SAFE_IMAGE_BUILDER = ROOT / "tools" / "zwasm_safe_image_builder.py"
 
@@ -31,6 +32,17 @@ def find_clang(explicit: str | None) -> str:
     raise RuntimeError("clang was not found; pass --clang or install LLVM.")
 
 
+def build_x86_runtime(clang: str, output: Path) -> None:
+    """Compile the vendored XWASM CPU/runtime; no external XWASM checkout required."""
+    output.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run([
+        clang, "--target=wasm32", "-O2", "-nostdlib",
+        "-Wl,--no-entry", "-Wl,--export-memory",
+        "-Wl,--export-table", "-Wl,--allow-undefined",
+        "-o", str(output), str(X86_RUNTIME_SOURCE),
+    ], check=True)
+
+
 def build_boot(clang: str, output: Path) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run([
@@ -46,10 +58,10 @@ def main() -> int:
     p.add_argument("input", type=Path)
     p.add_argument("-o", "--output", type=Path)
     p.add_argument("--clang")
-    p.add_argument("--boot", type=Path, help="browser/runtime WASM module; auto-detects runtime.wasm when present")
-    p.add_argument("--runtime", type=Path, help="alias for --boot; intended for an XWASM x86 runtime.wasm")
+    p.add_argument("--boot", type=Path, help="explicit browser/runtime WASM module")
+    p.add_argument("--runtime", type=Path, help="explicit external XWASM runtime.wasm (optional)")
     p.add_argument("--image", type=Path)
-    p.add_argument("--guest", type=Path, help="raw PE/guest executable to embed as zwasm_guest/guest.pe")
+    p.add_argument("--guest", type=Path, help="raw PE/guest executable to embed")
     p.add_argument("--trail", type=Path)
     p.add_argument("--include-native", action="store_true")
     p.add_argument("--gzip", choices=("auto", "always", "never"), default="auto")
@@ -61,25 +73,21 @@ def main() -> int:
 
     generated = root / ".zwasm"
     generated.mkdir(exist_ok=True)
+    clang = find_clang(args.clang)
 
     explicit_boot = args.runtime or args.boot
     if args.runtime and args.boot:
         raise RuntimeError("use only one of --boot or --runtime")
+
     if explicit_boot:
         boot = explicit_boot.resolve()
+        print("[ZWASM] using explicit runtime: " + str(boot))
     else:
-        runtime_candidates = (
-            root / "runtime.wasm",
-            root / ".zwasm" / "runtime.wasm",
-            ROOT / "runtime.wasm",
-            Path(r"C:\x86-to-wasm-packager\dist\x86-runtime-v0.9\runtime.wasm"),
-        )
-        boot = next((p for p in runtime_candidates if p.is_file()), generated / "boot.wasm")
-        if boot == generated / "boot.wasm":
-            build_boot(find_clang(args.clang), boot)
-            print("[ZWASM] generated adapter boot.wasm; pass --runtime for an x86 runtime")
-        else:
-            print("[ZWASM] using executable runtime: " + str(boot))
+        # The vendored CPU runtime is the default. This makes ZWASM portable:
+        # users only need this repository plus clang, not x86-to-wasm-packager.
+        boot = generated / "runtime.wasm"
+        build_x86_runtime(clang, boot)
+        print("[ZWASM] built vendored x86 runtime: " + str(boot))
 
     image = args.image.resolve() if args.image else None
     if image is None:
@@ -93,6 +101,7 @@ def main() -> int:
         exe_candidates = sorted(root.glob("*.exe"))
         preferred = [p for p in exe_candidates if p.name.lower() in ("isaac.exe", "isaacng.exe", "game.exe")]
         guest = preferred[0] if preferred else (exe_candidates[0] if len(exe_candidates) == 1 else None)
+
     if guest is not None:
         guest_dir = root / "zwasm_guest"
         guest_dir.mkdir(exist_ok=True)
