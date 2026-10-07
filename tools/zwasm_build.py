@@ -45,8 +45,10 @@ def main() -> int:
     p.add_argument("input", type=Path)
     p.add_argument("-o", "--output", type=Path)
     p.add_argument("--clang")
-    p.add_argument("--boot", type=Path)
+    p.add_argument("--boot", type=Path, help="browser/runtime WASM module; auto-detects runtime.wasm when present")
+    p.add_argument("--runtime", type=Path, help="alias for --boot; intended for an XWASM x86 runtime.wasm")
     p.add_argument("--image", type=Path)
+    p.add_argument("--guest", type=Path, help="raw PE/guest executable to embed as zwasm_guest/guest.pe")
     p.add_argument("--trail", type=Path)
     p.add_argument("--include-native", action="store_true")
     p.add_argument("--gzip", choices=("auto", "always", "never"), default="auto")
@@ -59,9 +61,23 @@ def main() -> int:
     generated = root / ".zwasm"
     generated.mkdir(exist_ok=True)
 
-    boot = args.boot.resolve() if args.boot else generated / "boot.wasm"
-    if not args.boot:
-        build_boot(find_clang(args.clang), boot)
+    explicit_boot = args.runtime or args.boot
+    if args.runtime and args.boot:
+        raise RuntimeError("use only one of --boot or --runtime")
+    if explicit_boot:
+        boot = explicit_boot.resolve()
+    else:
+        runtime_candidates = (
+            root / "runtime.wasm",
+            root / ".zwasm" / "runtime.wasm",
+            ROOT / "runtime.wasm",
+        )
+        boot = next((p for p in runtime_candidates if p.is_file()), generated / "boot.wasm")
+        if boot == generated / "boot.wasm":
+            build_boot(find_clang(args.clang), boot)
+            print("[ZWASM] generated adapter boot.wasm; pass --runtime for an x86 runtime")
+        else:
+            print("[ZWASM] using executable runtime: " + str(boot))
 
     image = args.image.resolve() if args.image else None
     if image is None:
@@ -70,8 +86,20 @@ def main() -> int:
                 image = candidate
                 break
 
-    if image is None:
-        print("[ZWASM] WARNING: no prepared image; package is boot/resource-only.")
+    guest = args.guest.resolve() if args.guest else None
+    if guest is None:
+        exe_candidates = sorted(root.glob("*.exe"))
+        preferred = [p for p in exe_candidates if p.name.lower() in ("isaac.exe", "isaacng.exe", "game.exe")]
+        guest = preferred[0] if preferred else (exe_candidates[0] if len(exe_candidates) == 1 else None)
+    if guest is not None:
+        guest_dir = root / "zwasm_guest"
+        guest_dir.mkdir(exist_ok=True)
+        guest_copy = guest_dir / "guest.pe"
+        if guest.resolve() != guest_copy.resolve():
+            shutil.copy2(guest, guest_copy)
+        print("[ZWASM] embedded guest PE: " + str(guest_copy))
+    else:
+        print("[ZWASM] WARNING: no PE guest found; runtime cannot launch an x86 executable.")
 
     output = args.output.resolve() if args.output else (
         ROOT / "dist" / (root.name.replace(" ", ".") + ".zgame")
