@@ -125,144 +125,116 @@ function drawBootFrame() {
   }
 }
 
-class BootRuntime {
+class GuestRuntime {
   constructor(reader) {
-    this.reader = reader;
-    this.instance = null;
-    this.memory = null;
+    this.reader=reader; this.instance=null; this.memory=null; this.running=false;
+    this.inputQueue=[]; this.audio=null; this.ctx2d=null; this.imageData=null;
   }
 
   async start() {
-    const manifest = this.reader.manifest;
-    if (!manifest.boot) throw new Error("package has no boot module");
-    const bytes = await this.reader.readEntry(manifest.boot);
-    let instance = null;
-    const imports = {
-      env: {
-        z_host_log: (ptr, len) => {
-          if (!instance) return;
-          const mem = new Uint8Array(instance.exports.memory.buffer);
-          log("boot: " + new TextDecoder().decode(mem.slice(ptr, ptr + len)));
-        },
-        z_host_image_size: () => {
-          if (!manifest.image) return 0;
-          return Number(this.reader.entry(manifest.image)?.size || 0);
-        },
-        z_host_frame: (frame) => {
-          drawBootFrame();
-          return 0;
-        },
-        z_host_input: (code, down) => {
-          log("input " + code + " " + (down ? "down" : "up"));
-          return 0;
-        },
-        z_host_api: (api, a0, a1, a2, a3) => {
-          state.bridge.calls++;
-          state.bridge.lastApi = api | 0;
-          let result = -1;
-          switch (api | 0) {
-            // KERNEL32
-            case 1: result = Math.floor(performance.now()) >>> 0; break;
-            case 2: result = 0; break;
-            case 10: result = Math.floor(performance.now() * 1000); break;
-            case 11: result = 1000000; break;
-            case 3: case 4: case 12: case 13:
-              // Allocation is owned by the eventual guest-memory bridge.
-              result = -1; break;
+    const manifest=this.reader.manifest;
+    const bytes=await this.reader.readEntry(manifest.boot);
+    const module=await WebAssembly.compile(bytes);
+    const imports={env:{}};
+    let instance=null;
+    const canvas=$("#screen");
+    this.ctx2d=canvas.getContext("2d");
+    const refreshMemory=()=>this.memory=(instance?.exports?.memory)||this.memory;
+    const memView=()=>new Uint8Array(refreshMemory()?.buffer||new ArrayBuffer(0));
+    const readString=(p,n=4096)=>{const m=memView();if(p<0||p>=m.length)return "";let e=p;while(e<m.length&&e-p<n&&m[e])e++;return new TextDecoder().decode(m.slice(p,e));};
+    const ensureAudio=()=>{if(!this.audio)this.audio=new AudioContext(); if(this.audio.state==="suspended")this.audio.resume().catch(()=>{});return this.audio;};
+    const present=()=>{if(this.ctx2d&&this.imageData)this.ctx2d.putImageData(this.imageData,0,0);};
+    const resizeSurface=(w,h)=>{w=Math.max(1,Math.min(1920,w|0));h=Math.max(1,Math.min(1080,h|0));canvas.width=w;canvas.height=h;this.imageData=this.ctx2d?.createImageData(w,h)||null;};
+    resizeSurface(640,360);
 
-            // USER32
-            case 100:
-            case 101: {
-              const down = state.keys.has(a0 | 0);
-              result = down ? 0x8000 : 0;
-              break;
-            }
-            case 102:
-            case 103:
-            case 104:
-            case 105:
-            case 106:
-            case 107:
-            case 108:
-            case 109:
-            case 110:
-              // Message/window objects need a guest handle table before they can be real.
-              result = -1;
-              break;
+    imports.env.xwasm_log=(level,ptr,len)=>log("x86["+level+"]: "+readString(ptr,Math.min(len>>>0,4096)));
+    imports.env.xwasm_input_quit=()=>{this.inputQueue.push({quit:true});};
+    imports.env.xwasm_input_poll=(ptr,remove)=>{const ev=this.inputQueue[0];if(!ev)return 0;const m=memView();if(ptr<0||ptr+28>m.length)return 0;
+      const d=new DataView(m.buffer);d.setUint32(ptr,0,true);d.setUint32(ptr+4,ev.type>>>0,true);d.setUint32(ptr+8,ev.code>>>0,true);d.setUint32(ptr+12,ev.value>>>0,true);d.setUint32(ptr+16,Date.now()/1|0,true);d.setInt32(ptr+20,ev.x|0,true);d.setInt32(ptr+24,ev.y|0,true);d.setUint32(ptr+26,0,true);
+      if(remove)this.inputQueue.shift(); return 1;};
+    imports.env.xwasm_audio_beep=(frequency,duration)=>{try{const a=ensureAudio(),o=a.createOscillator(),g=a.createGain();o.frequency.value=Math.max(40,Math.min(12000,frequency||440));g.gain.value=.045;o.connect(g).connect(a.destination);o.start();o.stop(a.currentTime+Math.max(.01,Math.min(2,(duration||50)/1000)));}catch(e){log("audio: "+e.message);}};
+    imports.env.xwasm_gfx_create=(w,h)=>{resizeSurface(w,h);return 1;};
+    imports.env.xwasm_gfx_clear=(color)=>{if(!this.ctx2d)return 0;const c=color>>>0;this.ctx2d.save();this.ctx2d.fillStyle="#"+(c&0xffffff).toString(16).padStart(6,"0");this.ctx2d.fillRect(0,0,canvas.width,canvas.height);this.ctx2d.restore();return 0;};
+    imports.env.xwasm_gfx_pixel=(x,y,color)=>{if(!this.imageData)return 0;x|=0;y|=0;if(x<0||y<0||x>=this.imageData.width||y>=this.imageData.height)return 0;const c=color>>>0,p=(y*this.imageData.width+x)*4;this.imageData.data[p]=(c>>>16)&255;this.imageData.data[p+1]=(c>>>8)&255;this.imageData.data[p+2]=c&255;this.imageData.data[p+3]=255;return 0;};
+    imports.env.xwasm_gfx_rect=(l,t,r,b,color)=>{if(!this.ctx2d)return 0;const c=color>>>0;this.ctx2d.fillStyle="#"+(c&0xffffff).toString(16).padStart(6,"0");this.ctx2d.fillRect(l|0,t|0,Math.max(0,(r-l)|0),Math.max(0,(b-t)|0));return 0;};
+    imports.env.xwasm_gfx_present=()=>{present();return 0;};
+    imports.env.xwasm_xapi_call=(id,argc)=>{state.bridge.calls++;state.bridge.lastApi=id|0;state.bridge.lastResult=0;return 0;};
 
-            // OPENGL32
-            case 200: // glGetString: pointer-backed strings require guest memory mapping.
-            case 201: // glClear
-            case 202: // glClearColor
-            case 203: // glViewport
-            case 204: // glDrawArrays
-            case 205: // glDrawElements
-            case 206: // glBindTexture
-            case 207: // glTexImage2D
-            case 208: // glTexParameteri
-            case 209: // glGenTextures
-            case 210: // glDeleteTextures
-            case 211: // context creation
-            case 212: // SwapBuffers
-              result = -1;
-              break;
+    const moduleImports=WebAssembly.Module.imports(module);
+    for(const item of moduleImports){
+      if(item.kind==="function" && imports[item.module]?.[item.name]===undefined){
+        (imports[item.module]??={})[item.name]=(...args)=>{log("runtime import stub: "+item.module+"."+item.name);return 0;};
+      } else if(item.kind==="memory" && imports[item.module]?.[item.name]===undefined){
+        imports[item.module]??={};
+        imports[item.module][item.name]=new WebAssembly.Memory({initial:1024,maximum:4096});
+      } else if(item.kind==="table" && imports[item.module]?.[item.name]===undefined){
+        imports[item.module]??={};
+        imports[item.module][item.name]=new WebAssembly.Table({initial:0,element:"funcref"});
+      }
+    }
+    const result=await WebAssembly.instantiate(module,imports);instance=result;
+    this.instance=instance;refreshMemory();
+    if(!this.memory)throw new Error("x86 runtime does not export/import memory");
+    if(typeof instance.exports.xwasm_init==="function")instance.exports.xwasm_init();
 
-            default:
-              break;
-          }
-          if (result === -1) {
-            state.bridge.unsupported++;
-            log("bridge unsupported api=" + api + " args=" +
-                [a0, a1, a2, a3].join(","));
-          }
-          state.bridge.lastResult = result | 0;
-          return result | 0;
-        }
-      },
-    };
-    const result = await WebAssembly.instantiate(bytes, imports);
-    instance = result.instance;
-    this.instance = instance;
-    this.memory = instance.exports.memory || null;
-    const init = instance.exports.zwasm_init;
-    if (typeof init !== "function") throw new Error("boot module lacks zwasm_init");
-    const rc = init();
-    if (rc !== 0) throw new Error("zwasm_init returned " + rc);
-    $("#runtimeState").textContent = "RUNNING";
-    setStatus("Running");
-    log("boot instantiated; init rc=" + rc);
-    log("bridge ready: kernel32 timing + user32 keyboard; unsupported calls are traced");
+    const guestPath=manifest.guest||"zwasm_guest/guest.pe";
+    let guest=this.reader.entry(guestPath);
+    if(!guest){guest=this.reader.manifest.entries.find(e=>e.path.endsWith("/guest.pe")||e.path.endsWith(".guest.pe"));}
+    if(!guest)throw new Error("package has no raw PE guest; rebuild with zwasm_build.py so zwasm_guest/guest.pe is embedded");
+    const pe=await this.reader.readEntry(guest.path);
+    if(typeof instance.exports.x86_alloc!=="function"||typeof instance.exports.x86_load_pe!=="function"){
+      throw new Error("runtime lacks x86_alloc/x86_load_pe; supply the XWASM x86 runtime.wasm");
+    }
+    const ptr=instance.exports.x86_alloc(pe.length);
+    if(!ptr)throw new Error("x86_alloc failed for "+pe.length+" bytes");
+    new Uint8Array(this.memory.buffer).set(pe,ptr);
+    const rc=instance.exports.x86_load_pe(ptr,pe.length);
+    log("x86 PE load rc="+rc+" bytes="+fmtBytes(pe.length));
+    if(rc!==0)throw new Error("x86_load_pe failed rc="+rc+" load_error="+(instance.exports.x86_get_load_error?.()??"?"));
+    this.running=true;$("#runtimeState").textContent="RUNNING";setStatus("Running");
+    log("x86 runtime online; guest entry=0x"+(instance.exports.x86_get_image_base?.()??0).toString(16));
     this.loop();
   }
 
-  loop() {
-    if (!this.instance) return;
-    state.frame++;
-    try {
-      if (typeof this.instance.exports.zwasm_frame === "function") {
-        this.instance.exports.zwasm_frame(state.frame);
-      }
-    } catch (error) {
-      log("runtime frame error: " + error.message);
-      this.stop();
-      return;
-    }
-    requestAnimationFrame(() => this.loop());
+  loop(){
+    if(!this.running||!this.instance)return;
+    try{
+      const run=this.instance.exports.x86_run;
+      if(typeof run==="function"){const rc=run(50000); if(rc<0){log("x86_run rc="+rc+" cpu_error=0x"+(this.instance.exports.x86_get_cpu_error?.()??0).toString(16));this.running=false;}}
+      state.frame++;
+      if(typeof this.instance.exports.x86_get_loaded==="function"&&this.instance.exports.x86_get_loaded()===0)this.running=false;
+    }catch(e){log("x86 runtime error: "+e.message);this.running=false;}
+    if(this.running)requestAnimationFrame(()=>this.loop());
   }
 
-  input(code, down) {
-    if (this.instance && typeof this.instance.exports.zwasm_input === "function") {
-      this.instance.exports.zwasm_input(code, down ? 1 : 0);
-    }
+  input(code,down){
+    this.inputQueue.push({type:down?0x100:0x101,code:code>>>0,value:down?1:0,x:0,y:0});
+    if(this.instance?.exports?.x86_get_message_count) state.bridge.calls++;
   }
-
-  stop() {
-    this.instance = null;
-    state.runtime = null;
-    $("#runtimeState").textContent = "READY";
-  }
+  stop(){this.running=false;this.instance=null;state.runtime=null;$("#runtimeState").textContent="READY";}
 }
 
+class BootRuntime {
+  constructor(reader){this.reader=reader;this.instance=null;}
+  async start(){
+    const bytes=await this.reader.readEntry(this.reader.manifest.boot);let instance=null;
+    const imports={env:{
+      z_host_log:(ptr,len)=>{if(!instance)return;const mem=new Uint8Array(instance.exports.memory.buffer);log("boot: "+new TextDecoder().decode(mem.slice(ptr,ptr+len)));},
+      z_host_image_size:()=>Number(this.reader.entry(this.reader.manifest.image)?.size||0),
+      z_host_frame:(frame)=>{drawBootFrame();return 0;},
+      z_host_input:(code,down)=>{log("input "+code+" "+(down?"down":"up"));return 0;},
+      z_host_api:(api,a0,a1,a2,a3)=>{state.bridge.calls++;state.bridge.lastApi=api|0;let result=-1;switch(api|0){case 1:result=Math.floor(performance.now())>>>0;break;case 2:result=0;break;case 10:result=Math.floor(performance.now()*1000);break;case 11:result=1000000;break;case 100:case 101:result=state.keys.has(a0|0)?0x8000:0;break;}if(result===-1){state.bridge.unsupported++;log("bridge unsupported api="+api+" args="+[a0,a1,a2,a3].join(","));}state.bridge.lastResult=result|0;return result|0;}
+    }};
+    const result=await WebAssembly.instantiate(bytes,imports);instance=result.instance;this.instance=instance;
+    if(typeof instance.exports.zwasm_init!=="function")throw new Error("boot module lacks zwasm_init");
+    const rc=instance.exports.zwasm_init();if(rc!==0)throw new Error("zwasm_init returned "+rc);
+    $("#runtimeState").textContent="RUNNING";setStatus("Running");log("adapter boot instantiated; init rc="+rc);
+    this.loop();
+  }
+  loop(){if(!this.instance)return;state.frame++;this.instance.exports.zwasm_frame?.(state.frame);requestAnimationFrame(()=>this.loop());}
+  input(code,down){this.instance?.exports.zwasm_input?.(code,down?1:0);}
+  stop(){this.instance=null;state.runtime=null;$("#runtimeState").textContent="READY";}
+}
 async function saveState() {
   if (!state.pkg) return log("nothing loaded");
   const db = await openSaveDB();
@@ -313,6 +285,7 @@ async function loadSource(source, label, size) {
 
   const manifest = reader.manifest;
   const entries = manifest.entries;
+  manifest.guest = manifest.guest || "zwasm_guest/guest.pe";
   const total = entries.reduce((sum, entry) => sum + Number(entry.size || 0), 0);
   const instances = entries.filter((entry) => entry.kind === "instance").length;
 
@@ -342,11 +315,11 @@ async function loadSource(source, label, size) {
   }
 
   $("#overlay span").textContent = manifest.boot
-    ? "Package loaded. Starting browser boot runtime…"
+    ? (reader.entry("zwasm_guest/guest.pe") ? "Package loaded. Starting x86 guest runtime…" : "Package loaded. Starting browser boot runtime…")
     : "Package loaded. No boot module is embedded.";
 
   if (manifest.boot) {
-    const runtime = new BootRuntime(reader);
+    const runtime = reader.entry("zwasm_guest/guest.pe") ? new GuestRuntime(reader) : new BootRuntime(reader);
     state.runtime = runtime;
     await runtime.start();
     drawBootFrame();
