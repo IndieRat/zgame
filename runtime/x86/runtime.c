@@ -22,6 +22,7 @@ static uint32_t x86_control_fault_kind=0;
 static uint32_t x86_control_fault_eip=0,x86_control_fault_next_eip=0;
 static uint32_t x86_control_fault_target=0,x86_control_fault_slot=0;
 static uint32_t x86_control_fault_opcode=0,x86_control_fault_modrm=0;
+static uint32_t x86_last_stack_fault_esp=0,x86_last_stack_fault_eip=0,x86_last_stack_fault_kind=0;
 static uint8_t x86_memory_fault_byte=0;
 static uint8_t *x86_wasm_byte_ptr(uint32_t p,uint32_t size,uint32_t kind){
  uint32_t pages=__builtin_wasm_memory_size(0u);
@@ -1707,17 +1708,17 @@ static void modrm_write32(uint8_t m,uint32_t *ip,uint32_t v){
  * guest stack region, not merely on raw WASM addresses. */
 static int x86_stack_push32(uint32_t v){
  uint32_t next=regs[R_ESP]-4u;
- if(next>regs[R_ESP]||!x86_mem_region_find(next,4u,X86_MEM_WRITE)){x86_mem_faults++;cpu_error=0xE001u;return 0;}
+ if(next>regs[R_ESP]||!x86_mem_region_find(next,4u,X86_MEM_WRITE)){x86_mem_faults++;x86_last_stack_fault_esp=next;x86_last_stack_fault_eip=eip;x86_last_stack_fault_kind=1u;cpu_error=0xE001u;return 0;}
  regs[R_ESP]=next;wr32(next,v);return 1;
 }
 static int x86_stack_pop32(uint32_t *v){
  uint32_t sp=regs[R_ESP];
- if(!x86_mem_region_find(sp,4u,X86_MEM_READ)){x86_mem_faults++;cpu_error=0xE002u;return 0;}
+ if(!x86_mem_region_find(sp,4u,X86_MEM_READ)){x86_mem_faults++;x86_last_stack_fault_esp=sp;x86_last_stack_fault_eip=eip;x86_last_stack_fault_kind=2u;cpu_error=0xE002u;return 0;}
  *v=rd32(sp);regs[R_ESP]=sp+4u;return 1;
 }
 static int x86_stack_discard(uint32_t n){
  uint32_t sp=regs[R_ESP],next=sp+n;
- if(next<sp||!x86_mem_region_find(sp,n,X86_MEM_READ)){x86_mem_faults++;cpu_error=0xE003u;return 0;}
+ if(next<sp||!x86_mem_region_find(sp,n,X86_MEM_READ)){x86_mem_faults++;x86_last_stack_fault_esp=sp;x86_last_stack_fault_eip=eip;x86_last_stack_fault_kind=3u;cpu_error=0xE003u;return 0;}
  regs[R_ESP]=next;return 1;
 }
 
@@ -2808,6 +2809,11 @@ __attribute__((export_name("x86_get_edx"))) uint32_t x86_get_edx(void){return re
 __attribute__((export_name("x86_get_ebx"))) uint32_t x86_get_ebx(void){return regs[R_EBX];}
 __attribute__((export_name("x86_get_esp"))) uint32_t x86_get_esp(void){return regs[R_ESP];}
 __attribute__((export_name("x86_get_stack_faults"))) uint32_t x86_get_stack_faults(void){return x86_mem_faults;}
+__attribute__((export_name("x86_get_last_stack_fault_esp"))) uint32_t x86_get_last_stack_fault_esp(void){return x86_last_stack_fault_esp;}
+__attribute__((export_name("x86_get_last_stack_fault_eip"))) uint32_t x86_get_last_stack_fault_eip(void){return x86_last_stack_fault_eip;}
+__attribute__((export_name("x86_get_last_stack_fault_kind"))) uint32_t x86_get_last_stack_fault_kind(void){return x86_last_stack_fault_kind;}
+__attribute__((export_name("x86_get_stack_region_base"))) uint32_t x86_get_stack_region_base(void){return X86_STACK_BASE;}
+__attribute__((export_name("x86_get_stack_region_top"))) uint32_t x86_get_stack_region_top(void){return X86_STACK_TOP;}
 __attribute__((export_name("x86_get_first_fault_eip"))) uint32_t x86_get_first_fault_eip(void){return x86_first_fault_eip;}
 __attribute__((export_name("x86_get_last_fault_eip"))) uint32_t x86_get_last_fault_eip(void){return x86_last_fault_eip;}
 __attribute__((export_name("x86_get_first_fault_count"))) uint32_t x86_get_first_fault_count(void){return x86_first_fault_count;}
