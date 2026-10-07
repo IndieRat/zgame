@@ -125,121 +125,213 @@ function drawBootFrame() {
   }
 }
 
+const XAPI_BUILTINS = {
+  "kernel32!gettickcount": () => Math.floor(performance.now()) >>> 0,
+  "winmm!timegettime": () => Math.floor(performance.now()) >>> 0,
+  "kernel32!sleep": () => 0,
+  "user32!getasynckeystate": (rt, s) => (state.keys.has(s[0] | 0) ? 0x8000 : 0),
+  "user32!getkeystate": (rt, s) => (state.keys.has(s[0] | 0) ? 0x8000 : 0),
+  "kernel32!queryperformancefrequency": (rt, s) => { rt.writeU64(s[0], 1000000); return 1; },
+  "kernel32!queryperformancecounter": (rt, s) => { rt.writeU64(s[0], Math.floor(performance.now() * 1000)); return 1; },
+};
+
 class GuestRuntime {
-  constructor(reader) {
-    this.reader=reader; this.instance=null; this.memory=null; this.running=false;
-    this.inputQueue=[]; this.audio=null; this.ctx2d=null; this.imageData=null;
+  constructor(reader, module) {
+    this.reader = reader; this.module = module; this.instance = null; this.memory = null;
+    this.running = false; this.inputQueue = []; this.audio = null; this.ctx2d = null; this.imageData = null;
+    this.xapiTable = new Map(); this.xapiUnsupported = new Map(); this.diagShown = false;
+  }
+
+  mem() { return new Uint8Array(this.instance.exports.memory.buffer); }
+
+  writeU64(addr, value) {
+    const ex = this.instance.exports, a = addr >>> 0;
+    const lo = value % 4294967296, hi = Math.floor(value / 4294967296);
+    for (let i = 0; i < 4; i++) { ex.x86_guest_write8(a + i, (lo >>> (i * 8)) & 255); ex.x86_guest_write8(a + 4 + i, (hi >>> (i * 8)) & 255); }
+  }
+
+  allocCopy(bytes) {
+    const ex = this.instance.exports, ptr = ex.x86_alloc(bytes.length + 1);
+    if (!ptr) throw new Error("x86_alloc failed for " + bytes.length + " bytes");
+    const m = this.mem(); m.set(bytes, ptr); m[ptr + bytes.length] = 0;
+    return ptr;
+  }
+
+  buildImports() {
+    const canvas = $("#screen"), self = this, imports = { env: {} }, env = imports.env;
+    this.ctx2d = canvas.getContext("2d");
+    const readString = (p, n) => { const m = self.mem(); if (p < 0 || p >= m.length) return ""; let e = p; while (e < m.length && e - p < n && m[e]) e++; return new TextDecoder().decode(m.slice(p, e)); };
+    const ensureAudio = () => { if (!self.audio) self.audio = new AudioContext(); if (self.audio.state === "suspended") self.audio.resume().catch(() => {}); return self.audio; };
+    const css = (c) => "#" + ((c >>> 0) & 0xffffff).toString(16).padStart(6, "0");
+    const resize = (w, h) => { w = Math.max(1, Math.min(1920, w | 0)); h = Math.max(1, Math.min(1080, h | 0)); canvas.width = w; canvas.height = h; self.imageData = self.ctx2d.createImageData(w, h); };
+    resize(640, 360);
+    env.z_host_log = (level, ptr, len) => log("x86[" + level + "]: " + readString(ptr, Math.min(len >>> 0, 4096)));
+    env.z_host_input_quit = () => { self.inputQueue.push({ quit: true }); };
+    env.z_host_input_poll = (ptr, remove) => {
+      const ev = self.inputQueue[0]; if (!ev) return 0;
+      const m = self.mem(); if (ptr < 0 || ptr + 28 > m.length) return 0;
+      const d = new DataView(m.buffer);
+      d.setUint32(ptr, 0, true); d.setUint32(ptr + 4, ev.type >>> 0, true); d.setUint32(ptr + 8, ev.code >>> 0, true);
+      d.setUint32(ptr + 12, ev.value >>> 0, true); d.setUint32(ptr + 16, (Date.now() / 1) | 0, true);
+      d.setInt32(ptr + 20, ev.x | 0, true); d.setInt32(ptr + 24, ev.y | 0, true);
+      if (remove) self.inputQueue.shift();
+      return 1;
+    };
+    env.z_host_audio_beep = (f, ms) => { try { const a = ensureAudio(), o = a.createOscillator(), g = a.createGain(); o.frequency.value = Math.max(40, Math.min(12000, f || 440)); g.gain.value = 0.045; o.connect(g).connect(a.destination); o.start(); o.stop(a.currentTime + Math.max(0.01, Math.min(2, (ms || 50) / 1000))); } catch (e) { log("audio: " + e.message); } };
+    env.z_host_gfx_create = (w, h) => { resize(w, h); return 1; };
+    env.z_host_gfx_clear = (c) => { self.ctx2d.fillStyle = css(c); self.ctx2d.fillRect(0, 0, canvas.width, canvas.height); const d = self.imageData.data, r = (c >>> 16) & 255, g = (c >>> 8) & 255, b = c & 255; for (let i = 0; i < d.length; i += 4) { d[i] = r; d[i + 1] = g; d[i + 2] = b; d[i + 3] = 255; } return 0; };
+    env.z_host_gfx_pixel = (x, y, c) => { const im = self.imageData; if (!im) return 0; x |= 0; y |= 0; if (x < 0 || y < 0 || x >= im.width || y >= im.height) return 0; const p = (y * im.width + x) * 4; im.data[p] = (c >>> 16) & 255; im.data[p + 1] = (c >>> 8) & 255; im.data[p + 2] = c & 255; im.data[p + 3] = 255; return 0; };
+    env.z_host_gfx_rect = (l, t, r, b, c) => { const im = self.imageData; if (!im) return 0; const x0 = Math.max(0, l | 0), y0 = Math.max(0, t | 0), x1 = Math.min(im.width, r | 0), y1 = Math.min(im.height, b | 0); const R = (c >>> 16) & 255, G = (c >>> 8) & 255, B = c & 255; for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) { const p = (y * im.width + x) * 4; im.data[p] = R; im.data[p + 1] = G; im.data[p + 2] = B; im.data[p + 3] = 255; } return 0; };
+    env.z_host_gfx_present = () => { if (self.imageData) self.ctx2d.putImageData(self.imageData, 0, 0); return 0; };
+    env.z_host_xapi_call = (id, argc) => self.xapiCall(id >>> 0, argc | 0);
+    return imports;
+  }
+
+  xapiCall(id, argc) {
+    state.bridge.calls++; state.bridge.lastApi = id;
+    const fn = this.xapiTable.get(id);
+    const key = fn ? (fn.lib + "!" + fn.name).toLowerCase() : null;
+    const handler = key ? XAPI_BUILTINS[key] : null;
+    let result = 0;
+    if (handler) {
+      const ex = this.instance.exports;
+      const slots = new Float64Array(ex.memory.buffer, ex.x86_xapi_slots(), 16);
+      try { result = handler(this, slots, fn) | 0; } catch (e) { log("xapi " + key + " threw: " + e.message); }
+    } else {
+      state.bridge.unsupported++;
+      const label = key || ("id " + id);
+      const n = (this.xapiUnsupported.get(label) || 0) + 1;
+      this.xapiUnsupported.set(label, n);
+      if (n === 1) log("xapi unsupported: " + label + " (argc=" + argc + ") -> returning 0");
+    }
+    state.bridge.lastResult = result;
+    return result;
+  }
+
+  async loadXapiManifests() {
+    const ex = this.instance.exports;
+    for (const entry of ZWASMHost.findXapiEntries(this.reader.manifest)) {
+      if (!/\.xapi\.json$/i.test(entry.path)) { log("xapi: " + entry.path + " is not JSON; binary containers need converting with .xapi.json export"); continue; }
+      const doc = JSON.parse(new TextDecoder().decode(await this.reader.readEntry(entry.path)));
+      const put = (...parts) => { const bytes = new TextEncoder().encode(parts.join("\0") + "\0"); new Uint8Array(ex.memory.buffer).set(bytes, ex.x86_xapi_scratch()); };
+      let ok = 0, bad = 0;
+      for (const [alias, target] of Object.entries(doc.aliases || {})) { put(alias, target); ex.x86_xapi_register_alias(); }
+      for (const f of doc.functions || []) {
+        const args = f.args || [];
+        const scratch = ex.x86_xapi_scratch(), head = new TextEncoder().encode(f.lib + "\0" + f.name + "\0");
+        const m = new Uint8Array(ex.memory.buffer); m.set(head, scratch); m.set(args, scratch + head.length);
+        const r = ex.x86_xapi_register(f.id >>> 0, f.abi | 0, args.length, f.ret | 0) >>> 0;
+        if (r === 0xFFFFFFFF) bad++; else ok++;
+      }
+      log("xapi: " + entry.path + " registered " + ok + " functions" + (bad ? ", " + bad + " rejected" : ""));
+    }
+    this.xapiTable = ZWASMHost.readXapiTable(ex, ex.memory.buffer);
   }
 
   async start() {
-    const manifest=this.reader.manifest;
-    const bytes=await this.reader.readEntry(manifest.boot);
-    const module=await WebAssembly.compile(bytes);
-    const imports={env:{}};
-    let instance=null;
-    const canvas=$("#screen");
-    this.ctx2d=canvas.getContext("2d");
-    const refreshMemory=()=>this.memory=(instance?.exports?.memory)||this.memory;
-    const memView=()=>new Uint8Array(refreshMemory()?.buffer||new ArrayBuffer(0));
-    const readString=(p,n=4096)=>{const m=memView();if(p<0||p>=m.length)return "";let e=p;while(e<m.length&&e-p<n&&m[e])e++;return new TextDecoder().decode(m.slice(p,e));};
-    const ensureAudio=()=>{if(!this.audio)this.audio=new AudioContext(); if(this.audio.state==="suspended")this.audio.resume().catch(()=>{});return this.audio;};
-    const present=()=>{if(this.ctx2d&&this.imageData)this.ctx2d.putImageData(this.imageData,0,0);};
-    const resizeSurface=(w,h)=>{w=Math.max(1,Math.min(1920,w|0));h=Math.max(1,Math.min(1080,h|0));canvas.width=w;canvas.height=h;this.imageData=this.ctx2d?.createImageData(w,h)||null;};
-    resizeSurface(640,360);
+    const manifest = this.reader.manifest;
+    const imports = this.buildImports();
+    const stubbed = ZWASMHost.fillMissingImports(WebAssembly, this.module, imports, (k) => log("runtime import stub called: " + k));
+    if (stubbed.length) log("host does not implement: " + stubbed.join(", "));
+    this.instance = await WebAssembly.instantiate(this.module, imports);
+    const ex = this.instance.exports;
+    this.memory = ex.memory;
+    if (!this.memory) throw new Error("x86 runtime does not export memory");
+    ex.zwasm_init();
 
-    imports.env.z_host_log=(level,ptr,len)=>log("x86["+level+"]: "+readString(ptr,Math.min(len>>>0,4096)));
-    imports.env.z_host_input_quit=()=>{this.inputQueue.push({quit:true});};
-    imports.env.z_host_input_poll=(ptr,remove)=>{const ev=this.inputQueue[0];if(!ev)return 0;const m=memView();if(ptr<0||ptr+28>m.length)return 0;
-      const d=new DataView(m.buffer);d.setUint32(ptr,0,true);d.setUint32(ptr+4,ev.type>>>0,true);d.setUint32(ptr+8,ev.code>>>0,true);d.setUint32(ptr+12,ev.value>>>0,true);d.setUint32(ptr+16,Date.now()/1|0,true);d.setInt32(ptr+20,ev.x|0,true);d.setInt32(ptr+24,ev.y|0,true);
-      if(remove)this.inputQueue.shift(); return 1;};
-    imports.env.z_host_audio_beep=(frequency,duration)=>{try{const a=ensureAudio(),o=a.createOscillator(),g=a.createGain();o.frequency.value=Math.max(40,Math.min(12000,frequency||440));g.gain.value=.045;o.connect(g).connect(a.destination);o.start();o.stop(a.currentTime+Math.max(.01,Math.min(2,(duration||50)/1000)));}catch(e){log("audio: "+e.message);}};
-    imports.env.z_host_gfx_create=(w,h)=>{resizeSurface(w,h);return 1;};
-    imports.env.z_host_gfx_clear=(color)=>{if(!this.ctx2d)return 0;const c=color>>>0;this.ctx2d.save();this.ctx2d.fillStyle="#"+(c&0xffffff).toString(16).padStart(6,"0");this.ctx2d.fillRect(0,0,canvas.width,canvas.height);this.ctx2d.restore();return 0;};
-    imports.env.z_host_gfx_pixel=(x,y,color)=>{if(!this.imageData)return 0;x|=0;y|=0;if(x<0||y<0||x>=this.imageData.width||y>=this.imageData.height)return 0;const c=color>>>0,p=(y*this.imageData.width+x)*4;this.imageData.data[p]=(c>>>16)&255;this.imageData.data[p+1]=(c>>>8)&255;this.imageData.data[p+2]=c&255;this.imageData.data[p+3]=255;return 0;};
-    imports.env.z_host_gfx_rect=(l,t,r,b,color)=>{if(!this.ctx2d)return 0;const c=color>>>0;this.ctx2d.fillStyle="#"+(c&0xffffff).toString(16).padStart(6,"0");this.ctx2d.fillRect(l|0,t|0,Math.max(0,(r-l)|0),Math.max(0,(b-t)|0));return 0;};
-    imports.env.z_host_gfx_present=()=>{present();return 0;};
-    imports.env.z_host_xapi_call=(id,argc)=>{state.bridge.calls++;state.bridge.lastApi=id|0;state.bridge.lastResult=0;return 0;};
+    const guest = ZWASMHost.findGuestEntry(manifest);
+    if (!guest) throw new Error("package has no guest PE (looked for " + ZWASMHost.GUEST_PATHS.join(", ") + "); rebuild with tools/zwasm_build.py --guest <game.exe>");
+    log("guest: " + guest.path + " · " + fmtBytes(guest.size));
 
-    const moduleImports=WebAssembly.Module.imports(module);
-    for(const item of moduleImports){
-      if(item.kind==="function" && imports[item.module]?.[item.name]===undefined){
-        (imports[item.module]??={})[item.name]=(...args)=>{log("runtime import stub: "+item.module+"."+item.name);return 0;};
-      } else if(item.kind==="memory" && imports[item.module]?.[item.name]===undefined){
-        imports[item.module]??={};
-        imports[item.module][item.name]=new WebAssembly.Memory({initial:1024,maximum:4096});
-      } else if(item.kind==="table" && imports[item.module]?.[item.name]===undefined){
-        imports[item.module]??={};
-        imports[item.module][item.name]=new WebAssembly.Table({initial:0,element:"funcref"});
-      }
+    const dlls = ZWASMHost.findGuestDlls(manifest);
+    for (const dll of dlls) {
+      const bytes = await this.reader.readEntry(dll.path);
+      const name = dll.path.split("/").pop();
+      const namePtr = this.allocCopy(new TextEncoder().encode(name));
+      const dataPtr = this.allocCopy(bytes);
+      const rc = ex.x86_dll_register_image(namePtr, dataPtr, bytes.length);
+      log("dll register " + name + " · " + fmtBytes(bytes.length) + " rc=" + rc);
     }
-    for (const item of moduleImports) {
-      const value = imports[item.module]?.[item.name];
-      if (item.kind === "function" && typeof value !== "function") {
-        throw new Error("missing callable WASM import: " + item.module + "." + item.name);
-      }
-    }
-    const result=await WebAssembly.instantiate(module,imports);instance=result;
-    this.instance=instance;refreshMemory();
-    if(!this.memory)throw new Error("x86 runtime does not export/import memory");
-    if(typeof instance.exports.zwasm_init==="function")instance.exports.zwasm_init();
 
-    const guestPath=manifest.guest||"zwasm_guest/guest.pe";
-    let guest=this.reader.entry(guestPath);
-    if(!guest){guest=this.reader.manifest.entries.find(e=>e.path.endsWith("/guest.pe")||e.path.endsWith(".guest.pe"));}
-    if(!guest)throw new Error("package has no raw PE guest; rebuild with zwasm_build.py so zwasm_guest/guest.pe is embedded");
-    const pe=await this.reader.readEntry(guest.path);
-    if(typeof instance.exports.x86_alloc!=="function"||typeof instance.exports.x86_load_pe!=="function"){
-      throw new Error("runtime lacks x86_alloc/x86_load_pe; package was not built with the ZWASM x86 runtime");
+    const pe = await this.reader.readEntry(guest.path);
+    const ptr = this.allocCopy(pe);
+    const rc = ex.x86_load_pe(ptr, pe.length);
+    log("x86 PE load rc=" + rc + " bytes=" + fmtBytes(pe.length));
+    if (rc !== 0) throw new Error("x86_load_pe failed rc=" + rc + " load_error=" + (ex.x86_get_load_error?.() ?? "?"));
+
+    for (const dll of dlls) {
+      const namePtr = this.allocCopy(new TextEncoder().encode(dll.path.split("/").pop()));
+      ex.x86_dll_load_registered(namePtr);
     }
-    const ptr=instance.exports.x86_alloc(pe.length);
-    if(!ptr)throw new Error("x86_alloc failed for "+pe.length+" bytes");
-    new Uint8Array(this.memory.buffer).set(pe,ptr);
-    const rc=instance.exports.x86_load_pe(ptr,pe.length);
-    log("x86 PE load rc="+rc+" bytes="+fmtBytes(pe.length));
-    if(rc!==0)throw new Error("x86_load_pe failed rc="+rc+" load_error="+(instance.exports.x86_get_load_error?.()??"?"));
-    this.running=true;$("#runtimeState").textContent="RUNNING";setStatus("Running");
-    log("x86 runtime online; guest entry=0x"+(instance.exports.x86_get_image_base?.()??0).toString(16));
+    if (dlls.length) log("dll rebind: unresolved imports=" + ex.x86_dll_rebind_imports());
+
+    await this.loadXapiManifests();
+    log("imports: " + ex.x86_get_import_resolved() + "/" + ex.x86_get_import_count() + " resolved, " + ex.x86_get_import_failed() + " failed · xapi functions: " + ex.x86_get_xapi_count());
+
+    this.running = true; $("#runtimeState").textContent = "RUNNING"; setStatus("Running");
+    log("x86 runtime online; image base=0x" + (ex.x86_get_image_base?.() ?? 0).toString(16));
     this.loop();
   }
 
-  loop(){
-    if(!this.running||!this.instance)return;
-    try{
-      const run=this.instance.exports.x86_run;
-      if(typeof run==="function"){const rc=run(50000); if(rc<0){log("x86_run rc="+rc+" cpu_error=0x"+(this.instance.exports.x86_get_cpu_error?.()??0).toString(16));this.running=false;}}
-      state.frame++;
-      if(typeof this.instance.exports.x86_get_loaded==="function"&&this.instance.exports.x86_get_loaded()===0)this.running=false;
-    }catch(e){log("x86 runtime error: "+e.message);this.running=false;}
-    if(this.running)requestAnimationFrame(()=>this.loop());
+  diagnostics(reason) {
+    if (this.diagShown || !this.instance) return;
+    this.diagShown = true;
+    const ex = this.instance.exports, hex = (v) => "0x" + (v >>> 0).toString(16);
+    log("diag: " + reason + " eip=" + hex(ex.x86_get_eip()) + " steps=" + ex.x86_get_steps() + " cpu_error=" + hex(ex.x86_get_cpu_error()) + " halted=" + ex.x86_get_halted());
+    log("diag: imports " + ex.x86_get_import_resolved() + "/" + ex.x86_get_import_count() + " resolved, " + ex.x86_get_import_failed() + " failed; crt exited=" + ex.x86_crt_get_exited() + " code=" + ex.x86_crt_get_exit_code() + " last xapi id=" + ex.x86_get_last_xapi_id());
+    const str = (fnName, i) => { let s = ""; for (let j = 0; j < 255; j++) { const c = ex[fnName](i, j); if (!c) break; s += String.fromCharCode(c); } return s; };
+    let shown = 0;
+    for (let i = 0, n = ex.x86_get_gdr_count(); i < n && shown < 25; i++) {
+      if (ex.x86_get_gdr_target(i) !== 0) continue;
+      log("diag: unresolved import " + str("x86_get_gdr_dll_name_byte", i) + "!" + str("x86_get_gdr_func_name_byte", i)); shown++;
+    }
+    for (const [k, n] of this.xapiUnsupported) log("diag: unsupported xapi " + k + " x" + n);
   }
 
-  input(code,down){
-    this.inputQueue.push({type:down?0x100:0x101,code:code>>>0,value:down?1:0,x:0,y:0});
-    if(this.instance?.exports?.x86_get_message_count) state.bridge.calls++;
+  loop() {
+    if (!this.running || !this.instance) return;
+    const ex = this.instance.exports, t0 = performance.now();
+    try {
+      while (performance.now() - t0 < 12) {
+        const rc = ex.x86_run(20000);
+        if (rc < 0) { log("x86_run rc=" + rc + " cpu_error=0x" + ex.x86_get_cpu_error().toString(16)); this.running = false; this.diagnostics("cpu fault"); break; }
+        if (rc === 1 || ex.x86_get_halted()) { this.running = false; this.diagnostics("guest halted"); break; }
+      }
+      state.frame++;
+    } catch (e) { log("x86 runtime error: " + e.message); this.running = false; this.diagnostics("host exception"); }
+    if (this.running) requestAnimationFrame(() => this.loop());
+    else { $("#runtimeState").textContent = "STOPPED"; setStatus("Stopped"); }
   }
-  stop(){this.running=false;this.instance=null;state.runtime=null;$("#runtimeState").textContent="READY";}
+
+  input(code, down) {
+    this.inputQueue.push({ type: down ? 0x100 : 0x101, code: code >>> 0, value: down ? 1 : 0, x: 0, y: 0 });
+    state.bridge.calls++;
+  }
+  stop() { this.running = false; this.instance = null; state.runtime = null; $("#runtimeState").textContent = "READY"; }
 }
 
 class BootRuntime {
-  constructor(reader){this.reader=reader;this.instance=null;}
-  async start(){
-    const bytes=await this.reader.readEntry(this.reader.manifest.boot);let instance=null;
-    const imports={env:{
-      z_host_log:(ptr,len)=>{if(!instance)return;const mem=new Uint8Array(instance.exports.memory.buffer);log("boot: "+new TextDecoder().decode(mem.slice(ptr,ptr+len)));},
-      z_host_image_size:()=>Number(this.reader.entry(this.reader.manifest.image)?.size||0),
-      z_host_frame:(frame)=>{drawBootFrame();return 0;},
-      z_host_input:(code,down)=>{log("input "+code+" "+(down?"down":"up"));return 0;},
-      z_host_api:(api,a0,a1,a2,a3)=>{state.bridge.calls++;state.bridge.lastApi=api|0;let result=-1;switch(api|0){case 1:result=Math.floor(performance.now())>>>0;break;case 2:result=0;break;case 10:result=Math.floor(performance.now()*1000);break;case 11:result=1000000;break;case 100:case 101:result=state.keys.has(a0|0)?0x8000:0;break;}if(result===-1){state.bridge.unsupported++;log("bridge unsupported api="+api+" args="+[a0,a1,a2,a3].join(","));}state.bridge.lastResult=result|0;return result|0;}
-    }};
-    const result=await WebAssembly.instantiate(bytes,imports);instance=result.instance;this.instance=instance;
-    if(typeof instance.exports.zwasm_init!=="function")throw new Error("boot module lacks zwasm_init");
-    const rc=instance.exports.zwasm_init();if(rc!==0)throw new Error("zwasm_init returned "+rc);
-    $("#runtimeState").textContent="RUNNING";setStatus("Running");log("adapter boot instantiated; init rc="+rc);
+  constructor(reader, module) { this.reader = reader; this.module = module; this.instance = null; }
+  async start() {
+    let instance = null;
+    const imports = { env: {
+      z_host_log: (ptr, len) => { if (!instance) return; const mem = new Uint8Array(instance.exports.memory.buffer); log("boot: " + new TextDecoder().decode(mem.slice(ptr, ptr + len))); },
+      z_host_image_size: () => Number(this.reader.entry(this.reader.manifest.image)?.size || 0),
+      z_host_frame: () => { drawBootFrame(); return 0; },
+      z_host_input: (code, down) => { log("input " + code + " " + (down ? "down" : "up")); return 0; },
+      z_host_api: (api, a0, a1, a2, a3) => { state.bridge.calls++; state.bridge.lastApi = api | 0; let result = -1; switch (api | 0) { case 1: result = Math.floor(performance.now()) >>> 0; break; case 2: result = 0; break; case 10: result = Math.floor(performance.now() * 1000); break; case 11: result = 1000000; break; case 100: case 101: result = state.keys.has(a0 | 0) ? 0x8000 : 0; break; } if (result === -1) { state.bridge.unsupported++; log("bridge unsupported api=" + api + " args=" + [a0, a1, a2, a3].join(",")); } state.bridge.lastResult = result | 0; return result | 0; },
+    } };
+    const stubbed = ZWASMHost.fillMissingImports(WebAssembly, this.module, imports, (k) => log("boot import stub called: " + k));
+    if (stubbed.length) log("boot host does not implement: " + stubbed.join(", "));
+    instance = await WebAssembly.instantiate(this.module, imports); this.instance = instance;
+    if (typeof instance.exports.zwasm_init !== "function") throw new Error("boot module lacks zwasm_init");
+    const rc = instance.exports.zwasm_init(); if (rc !== 0) throw new Error("zwasm_init returned " + rc);
+    $("#runtimeState").textContent = "RUNNING"; setStatus("Running"); log("adapter boot instantiated; init rc=" + rc);
     this.loop();
   }
-  loop(){if(!this.instance)return;state.frame++;this.instance.exports.zwasm_frame?.(state.frame);requestAnimationFrame(()=>this.loop());}
-  input(code,down){this.instance?.exports.zwasm_input?.(code,down?1:0);}
-  stop(){this.instance=null;state.runtime=null;$("#runtimeState").textContent="READY";}
+  loop() { if (!this.instance) return; state.frame++; this.instance.exports.zwasm_frame?.(state.frame); requestAnimationFrame(() => this.loop()); }
+  input(code, down) { this.instance?.exports.zwasm_input?.(code, down ? 1 : 0); }
+  stop() { this.instance = null; state.runtime = null; $("#runtimeState").textContent = "READY"; }
 }
 async function saveState() {
   if (!state.pkg) return log("nothing loaded");
@@ -291,7 +383,6 @@ async function loadSource(source, label, size) {
 
   const manifest = reader.manifest;
   const entries = manifest.entries;
-  manifest.guest = manifest.guest || "zwasm_guest/guest.pe";
   const total = entries.reduce((sum, entry) => sum + Number(entry.size || 0), 0);
   const instances = entries.filter((entry) => entry.kind === "instance").length;
 
@@ -320,17 +411,20 @@ async function loadSource(source, label, size) {
     log("image: " + manifest.image + " · " + fmtBytes(image.size) + " · " + image.compression);
   }
 
-  $("#overlay span").textContent = manifest.boot
-    ? (reader.entry("zwasm_guest/guest.pe") ? "Package loaded. Starting x86 guest runtime…" : "Package loaded. Starting browser boot runtime…")
-    : "Package loaded. No boot module is embedded.";
-
-  if (manifest.boot) {
-    const runtime = reader.entry("zwasm_guest/guest.pe") ? new GuestRuntime(reader) : new BootRuntime(reader);
-    state.runtime = runtime;
-    await runtime.start();
-    if (runtime instanceof BootRuntime) drawBootFrame();
-    $("#overlay").style.display = "none";
+  if (!manifest.boot) {
+    $("#overlay span").textContent = "Package loaded. No boot module is embedded.";
+    return reader;
   }
+  const module = await WebAssembly.compile(await reader.readEntry(manifest.boot));
+  const kind = ZWASMHost.runtimeKind(WebAssembly.Module.exports(module).map((e) => e.name));
+  log("runtime kind: " + kind);
+  if (kind === "unknown") throw new Error("boot module exports neither the x86 runtime (x86_load_pe/x86_run) nor the boot adapter (zwasm_init/zwasm_frame)");
+  $("#overlay span").textContent = kind === "x86" ? "Package loaded. Starting x86 guest runtime…" : "Package loaded. Starting browser boot runtime…";
+  const runtime = kind === "x86" ? new GuestRuntime(reader, module) : new BootRuntime(reader, module);
+  state.runtime = runtime;
+  await runtime.start();
+  if (runtime instanceof BootRuntime) drawBootFrame();
+  $("#overlay").style.display = "none";
   return reader;
 }
 
