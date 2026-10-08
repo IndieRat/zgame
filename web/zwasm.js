@@ -532,6 +532,21 @@ class GuestRuntime {
     if (ex.x86_get_esp) log("diag: GPR ESP="+hex(ex.x86_get_esp())+" EBP="+hex(ex.x86_get_ebp?.() ?? 0)+" stack=["+hex(ex.x86_get_stack_region_base?.() ?? 0)+".."+hex(ex.x86_get_stack_region_top?.() ?? 0)+"]");
     if (ex.x86_get_last_stack_fault_esp) log("diag: stack fault kind="+ex.x86_get_last_stack_fault_kind()+" esp="+hex(ex.x86_get_last_stack_fault_esp())+" eip="+hex(ex.x86_get_last_stack_fault_eip()));
     if (ex.x86_get_flow_count) { const n=Math.min(ex.x86_get_flow_count(),16); for(let i=0;i<n;i++) log("diag: flow[-"+i+"] eip="+hex(ex.x86_get_flow_eip(i))+" op="+hex(ex.x86_get_flow_opcode(i))+" esp="+hex(ex.x86_get_flow_esp(i))+" ebp="+hex(ex.x86_get_flow_ebp(i))); }
+    if (ex.x86_get_shadow_stat) {
+      const st = (n) => ex.x86_get_shadow_stat(n);
+      log("diag: shadow stack depth=" + st(0) + " calls=" + st(2) + " rets=" + st(3) + " unbalanced rets=" + st(4) + " unmatched rets=" + st(5) + " esp jumps=" + st(6));
+      const ev = (kind, label) => {
+        if (!(kind < 2 ? st(4) : st(5))) return;
+        const f = (n) => ex.x86_get_shadow_event(kind, n);
+        log("diag: " + label + " ret@" + hex(f(0)) + " -> " + hex(f(1)) + " esp=" + hex(f(2)) + (kind < 2 ? " expected=" + hex(f(3)) : "") + " callee=" + hex(f(4)) + " callsite=" + hex(f(5)) + " step=" + f(6) + " depth=" + f(7));
+      };
+      ev(0, "first unbalanced ret"); ev(2, "first unmatched ret"); ev(3, "last unmatched ret");
+      for (let n = Math.max(0, st(0) - 12); n < st(0); n++) log("diag: call chain[" + n + "] callee=" + hex(ex.x86_get_shadow_frame(n, 0)) + " from=" + hex(ex.x86_get_shadow_frame(n, 1)));
+      for (let k = 0; k < Math.min(st(6), 4); k++) {
+        log("diag: ESP jump #" + k + " at eip=" + hex(ex.x86_get_espw_event(k, 0)) + " esp " + hex(ex.x86_get_espw_event(k, 1)) + " -> " + hex(ex.x86_get_espw_event(k, 2)) + " step=" + ex.x86_get_espw_event(k, 4));
+        for (let n = 0; n < 24; n++) { const e = ex.x86_get_espw_snap(k, n, 0); if (e) log("diag:   " + hex(e) + " op=" + hex(ex.x86_get_espw_snap(k, n, 1)) + " esp=" + hex(ex.x86_get_espw_snap(k, n, 2)) + " ebp=" + hex(ex.x86_get_espw_snap(k, n, 3))); }
+      }
+    }
     log("diag: imports " + ex.x86_get_import_resolved() + "/" + ex.x86_get_import_count() + " resolved, " + ex.x86_get_import_failed() + " failed; crt exited=" + ex.x86_crt_get_exited() + " code=" + ex.x86_crt_get_exit_code() + " last xapi id=" + ex.x86_get_last_xapi_id());
     const str = (fnName, i) => { let s = ""; for (let j = 0; j < 255; j++) { const c = ex[fnName](i, j); if (!c) break; s += String.fromCharCode(c); } return s; };
     let shown = 0;
