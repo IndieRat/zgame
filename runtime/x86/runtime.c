@@ -2584,6 +2584,24 @@ static int cpu_step_legacy(void){
     eip=ip;
     return 0;
    }
+   if(sub==0u||sub==1u){ /* INC/DEC r/m32 (or r/m16 with operand-size override). */
+    uint32_t is_mem=(uint32_t)modrm_ea(m,&ip,&ea);
+    uint32_t width=decoded_operand16?16u:32u;
+    uint32_t mask=decoded_operand16?0xFFFFu:0xFFFFFFFFu;
+    uint32_t a=is_mem?(decoded_operand16?(uint32_t)rd16(ea):rd32(ea)):
+      (decoded_operand16?(uint32_t)reg16_read(m&7u):regs[m&7u]);
+    uint32_t old_cf=eflags&CF;
+    uint32_t r=sub==0u?(a+1u)&mask:(a-1u)&mask;
+    if(sub==0u)set_add_flags_width(a,1u,r,width);
+    else set_sub_flags_width(a,1u,r,width);
+    eflags=(eflags&~CF)|old_cf; /* INC/DEC preserve CF. */
+    if(is_mem){
+     if(decoded_operand16){wr8(ea,(uint8_t)r);wr8(ea+1u,(uint8_t)(r>>8));}
+     else wr32(ea,r);
+    }else if(decoded_operand16)reg16_write(m&7u,(uint16_t)r);
+    else regs[m&7u]=r;
+    eip=ip;return 0;
+   }
    if(sub!=2&&sub!=4){cpu_error=0xFF00u|sub;return -12;}
    if(modrm_ea(m,&ip,&ea))target=rd32(ea);else{ea=0;target=regs[m&7u];}
    uint32_t next=ip;
