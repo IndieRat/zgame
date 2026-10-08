@@ -2477,6 +2477,29 @@ static int cpu_step_legacy(void){
   case 0xCC:{ /* INT3: browser-compatible soft breakpoint/no-op */ eip=ip; return 0; }
   case 0x0F: {
    uint8_t op2=MEM8(ip++);
+   if(op2==0x10u||op2==0x11u){ /* MOVUPS xmm,xmm/m128 and MOVUPS xmm/m128,xmm */
+    uint8_t m=MEM8(ip++),d=(m>>3)&7u,s=m&7u;uint32_t ea=0;
+    if((m>>6)==3u){
+     if(op2==0x10u){
+      for(uint32_t b=0;b<16u;b++)xmm[d][b]=xmm[s][b];
+     }else{
+      for(uint32_t b=0;b<16u;b++)xmm[s][b]=xmm[d][b];
+     }
+    }else{
+     if(!modrm_ea(m,&ip,&ea)){cpu_error=0x0F10u|op2;return -18;}
+     if(!x86_mem_region_find(ea,16u,op2==0x10u?X86_MEM_READ:X86_MEM_WRITE)){
+      x86_mem_faults++;x86_last_fault_address=ea;x86_last_fault_size=16u;
+      x86_last_fault_kind=op2==0x10u?X86_MEM_READ:X86_MEM_WRITE;
+      cpu_error=0xE100u|(op2==0x10u?1u:2u);return -62;
+     }
+     if(op2==0x10u){
+      for(uint32_t b=0;b<16u;b++)xmm[d][b]=MEM8(ea+b);
+     }else{
+      for(uint32_t b=0;b<16u;b++)wr8(ea+b,xmm[d][b]);
+     }
+    }
+    eip=ip;return 0;
+   }
    if(op2==0xAF){uint8_t m=MEM8(ip++);int64_t p=(int64_t)(int32_t)regs[(m>>3)&7]*(int64_t)(int32_t)modrm_read32(m,&ip);uint32_t r=(uint32_t)p;regs[(m>>3)&7]=r;eflags=(eflags&~(CF|OF))|((p!=(int64_t)(int32_t)r)?(CF|OF):0);eip=ip;return 0;}
    if(op2==0x1Fu||op2==0x18u){uint8_t m=MEM8(ip++);uint32_t ea=0;if((m>>6)!=3)modrm_ea(m,&ip,&ea);eip=ip;return 0;} /* multi-byte NOP / PREFETCH */
    if(op2>=0x40u&&op2<=0x4Fu){ /* CMOVcc r,r/m */
