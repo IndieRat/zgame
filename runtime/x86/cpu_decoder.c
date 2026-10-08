@@ -518,7 +518,7 @@ static int cpu_step(void) {
             }
         }
         eip=d.cursor;
-        last_dispatch_id=31u;
+        last_dispatch_id=X86_DISPATCH_MOVUPS;
         last_dispatch_count++;
         x86_trace_record(saved_eip,before_flags,before_eax,before_ecx,before_edx,before_ebx,
                          before_opcode,last_dispatch_id);
