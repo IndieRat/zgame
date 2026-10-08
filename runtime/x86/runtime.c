@@ -152,6 +152,7 @@ static uint32_t trace_post_ebx[X86_TRACE_DEPTH],trace_post_edx[X86_TRACE_DEPTH];
 static uint32_t trace_post_flags[X86_TRACE_DEPTH];
 static uint32_t trace_dispatch[X86_TRACE_DEPTH];
 static char trace_semantic_id[X86_TRACE_DEPTH][X86_SEMANTIC_ID_MAX];
+static uint32_t trace_post_esp[X86_TRACE_DEPTH],trace_post_ebp[X86_TRACE_DEPTH];
 static uint32_t trace_count=0,trace_head=0,trace_failure_index=0;
 static int modrm_ea(uint8_t m,uint32_t *ip,uint32_t *ea);
 static int cpu_step_x87(uint8_t op,uint32_t *ip);
@@ -209,7 +210,57 @@ static void x86_profile_record(uint32_t ip){
   }
  }
 }
-static void x86_trace_reset(void){trace_count=0;trace_head=0;trace_failure_index=0;last_decoded_semantic_id[0]=0;}
+
+/* ---- Stack diagnostics: shadow call stack and ESP-jump watch ---------------------------------
+ * The shadow stack mirrors CALL/RET. A RET whose target is not the return address of any open
+ * call ("unmatched"), or whose ESP differs from the one right after the matching CALL's push
+ * ("mismatch"), is recorded with the callee that was running. The ESP watch records the first
+ * instructions after which ESP moved by more than 64 KiB, with a snapshot of the preceding trace. */
+#define X86_SHADOW_DEPTH 1024u
+#define X86_ESPW_EVENTS 4u
+#define X86_ESPW_SNAP 24u
+static uint32_t sh_ret[X86_SHADOW_DEPTH],sh_esp[X86_SHADOW_DEPTH],sh_callee[X86_SHADOW_DEPTH],sh_site[X86_SHADOW_DEPTH];
+static uint32_t sh_top=0,sh_overflow=0,sh_calls=0,sh_rets=0;
+static uint32_t sh_mm_count=0,sh_um_count=0;
+static uint32_t sh_mm[8],sh_um[8],sh_mm_last[8],sh_um_last[8]; /* ret_eip,target,esp,expected esp,callee,site,steps,depth */
+static uint32_t espw_count=0,espw_prev=0;
+static uint32_t espw_ev[X86_ESPW_EVENTS][6]; /* eip,esp before,esp after,opcode,steps,sh_top */
+static uint32_t espw_snap_eip[X86_ESPW_EVENTS][X86_ESPW_SNAP],espw_snap_op[X86_ESPW_EVENTS][X86_ESPW_SNAP],espw_snap_esp[X86_ESPW_EVENTS][X86_ESPW_SNAP],espw_snap_ebp[X86_ESPW_EVENTS][X86_ESPW_SNAP];
+static void x86_shadow_reset(void){sh_top=0;sh_overflow=0;sh_calls=0;sh_rets=0;sh_mm_count=0;sh_um_count=0;espw_count=0;espw_prev=0;for(uint32_t i=0;i<8u;i++){sh_mm[i]=sh_um[i]=sh_mm_last[i]=sh_um_last[i]=0;}}
+static void x86_shadow_call(uint32_t site,uint32_t ret_addr,uint32_t callee){
+ sh_calls++;
+ if(sh_top>=X86_SHADOW_DEPTH){sh_overflow++;return;}
+ sh_ret[sh_top]=ret_addr;sh_esp[sh_top]=regs[R_ESP];sh_callee[sh_top]=callee;sh_site[sh_top]=site;sh_top++;
+}
+static void x86_shadow_drop(void){if(sh_top)sh_top--;}
+static void x86_shadow_note(uint32_t*first,uint32_t*last,uint32_t*count,uint32_t ret_eip,uint32_t target,uint32_t esp,uint32_t expect,uint32_t callee,uint32_t site){
+ uint32_t v[8]={ret_eip,target,esp,expect,callee,site,steps,sh_top};
+ if(*count==0)for(uint32_t i=0;i<8u;i++)first[i]=v[i];
+ for(uint32_t i=0;i<8u;i++)last[i]=v[i];
+ (*count)++;
+}
+/* esp_at_ret points at the return address (before it is popped). */
+static void x86_shadow_ret(uint32_t ret_eip,uint32_t target,uint32_t esp_at_ret){
+ sh_rets++;
+ for(int32_t j=(int32_t)sh_top-1;j>=0;j--)if(sh_ret[j]==target){
+  if(esp_at_ret!=sh_esp[j])x86_shadow_note(sh_mm,sh_mm_last,&sh_mm_count,ret_eip,target,esp_at_ret,sh_esp[j],sh_callee[j],sh_site[j]);
+  sh_top=(uint32_t)j;return;
+ }
+ x86_shadow_note(sh_um,sh_um_last,&sh_um_count,ret_eip,target,esp_at_ret,0,sh_top?sh_callee[sh_top-1u]:0,sh_top?sh_site[sh_top-1u]:0);
+}
+static void x86_espw_event(uint32_t eip_before,uint32_t from,uint32_t to){
+ if(espw_count<X86_ESPW_EVENTS){
+  uint32_t k=espw_count;
+  espw_ev[k][0]=eip_before;espw_ev[k][1]=from;espw_ev[k][2]=to;espw_ev[k][3]=trace_count?trace_opcode[(trace_head+X86_TRACE_DEPTH-1u)%X86_TRACE_DEPTH]:0;espw_ev[k][4]=steps;espw_ev[k][5]=sh_top;
+  uint32_t n=trace_count<X86_ESPW_SNAP?trace_count:X86_ESPW_SNAP;
+  for(uint32_t i=0;i<X86_ESPW_SNAP;i++){
+   if(i<n){uint32_t idx=(trace_head+X86_TRACE_DEPTH-n+i)%X86_TRACE_DEPTH;espw_snap_eip[k][i]=trace_eip[idx];espw_snap_op[k][i]=trace_opcode[idx];espw_snap_esp[k][i]=trace_post_esp[idx];espw_snap_ebp[k][i]=trace_post_ebp[idx];}
+   else{espw_snap_eip[k][i]=espw_snap_op[k][i]=espw_snap_esp[k][i]=espw_snap_ebp[k][i]=0;}
+  }
+ }
+ espw_count++;
+}
+static void x86_trace_reset(void){trace_count=0;trace_head=0;trace_failure_index=0;last_decoded_semantic_id[0]=0;x86_shadow_reset();}
 static void x86_trace_record(uint32_t before_eip,uint32_t before_flags,uint32_t before_eax,uint32_t before_ecx,uint32_t before_edx,uint32_t before_ebx,uint32_t before_opcode,uint32_t dispatch){
  uint32_t i=trace_head%X86_TRACE_DEPTH;
  trace_eip[i]=before_eip; trace_next_eip[i]=eip; trace_opcode[i]=before_opcode;
@@ -218,6 +269,7 @@ static void x86_trace_record(uint32_t before_eip,uint32_t before_flags,uint32_t 
  trace_post_eax[i]=regs[R_EAX]; trace_post_ecx[i]=regs[R_ECX];
  trace_post_edx[i]=regs[R_EDX]; trace_post_ebx[i]=regs[R_EBX];
  trace_post_flags[i]=eflags;
+ trace_post_esp[i]=regs[R_ESP]; trace_post_ebp[i]=regs[R_EBP];
  x86_copy_semantic_id(trace_semantic_id[i],last_decoded_semantic_id);
  trace_head=(trace_head+1u)%X86_TRACE_DEPTH; if(trace_count<X86_TRACE_DEPTH)trace_count++;
  x86_profile_record(before_eip);
@@ -2137,7 +2189,7 @@ static int cpu_step_x87(uint8_t op,uint32_t *ip){
 }
 
 static int cpu_step_legacy(void){
- uint32_t ip=eip; uint8_t op=MEM8(ip++); steps++;
+ uint32_t ip=eip,eip_before_site=eip; uint8_t op=MEM8(ip++); steps++;
  switch(op){
   case 0xFC:eflags&=~DF;eip=ip;return 0;
   case 0xFD:eflags|=DF;eip=ip;return 0;
@@ -2298,6 +2350,18 @@ static int cpu_step_legacy(void){
   }
   case 0x69: {uint8_t m=MEM8(ip++);uint32_t a=modrm_read32(m,&ip),imm=rd32(ip);ip+=4;int64_t p=(int64_t)(int32_t)a*(int64_t)(int32_t)imm;uint32_t r=(uint32_t)p;uint32_t sx=(uint32_t)(int32_t)r;eflags=(eflags&~(CF|OF))|((p!=(int64_t)(int32_t)r)?(CF|OF):0);regs[(m>>3)&7]=r;eip=ip;return 0;}
   case 0x6B: {uint8_t m=MEM8(ip++);uint32_t a=modrm_read32(m,&ip);int32_t imm=(int8_t)MEM8(ip++);int64_t p=(int64_t)(int32_t)a*(int64_t)imm;uint32_t r=(uint32_t)p;eflags=(eflags&~(CF|OF))|((p!=(int64_t)(int32_t)r)?(CF|OF):0);regs[(m>>3)&7]=r;eip=ip;return 0;}
+  case 0xF6: { /* TEST/NOT/NEG r/m8 (MUL/DIV r/m8 are not implemented) */
+   uint8_t m=MEM8(ip++),sub=(m>>3)&7u;uint32_t ea=0;uint8_t v;
+   if(sub>3u){cpu_error=0xF600u|sub;return -47;}
+   if((m>>6)==3)v=reg8_read(m&7u);else{if(!modrm_ea(m,&ip,&ea)){cpu_error=0xF601u;return -48;}v=MEM8(ea);}
+   if(sub<2u){uint8_t imm=MEM8(ip++);set_logic_flags_width((uint32_t)(v&imm),8u);}
+   else{
+    uint8_t r=(sub==2u)?(uint8_t)~v:(uint8_t)(0u-v);
+    if(sub==3u){set_sub_flags_width(0u,v,r,8u);eflags=(eflags&~CF)|(v?CF:0u);}
+    if((m>>6)==3)reg8_write(m&7u,r);else wr8(ea,r);
+   }
+   eip=ip;return 0;
+  }
   case 0xF7: { /* NOT/NEG/MUL/IMUL/DIV/IDIV r/m32 */
    uint8_t m=MEM8(ip++),sub=(m>>3)&7; uint32_t ea=0,v=(m>>6)==3?regs[m&7]:(modrm_ea(m,&ip,&ea),rd32(ea));
    if(sub==2){v=~v;if((m>>6)==3)regs[m&7]=v;else wr32(ea,v);eip=ip;return 0;}
@@ -2393,6 +2457,47 @@ static int cpu_step_legacy(void){
   case 0x0F: {
    uint8_t op2=MEM8(ip++);
    if(op2==0xAF){uint8_t m=MEM8(ip++);int64_t p=(int64_t)(int32_t)regs[(m>>3)&7]*(int64_t)(int32_t)modrm_read32(m,&ip);uint32_t r=(uint32_t)p;regs[(m>>3)&7]=r;eflags=(eflags&~(CF|OF))|((p!=(int64_t)(int32_t)r)?(CF|OF):0);eip=ip;return 0;}
+   if(op2==0x1Fu||op2==0x18u){uint8_t m=MEM8(ip++);uint32_t ea=0;if((m>>6)!=3)modrm_ea(m,&ip,&ea);eip=ip;return 0;} /* multi-byte NOP / PREFETCH */
+   if(op2>=0x40u&&op2<=0x4Fu){ /* CMOVcc r,r/m */
+    uint8_t m=MEM8(ip++);int take;
+    if(decoded_operand16){uint16_t v=modrm_read16(m,&ip);take=cond((uint8_t)(0x70u+(op2&0xFu)));if(take)reg16_write((m>>3)&7u,v);}
+    else{uint32_t v=modrm_read32(m,&ip);take=cond((uint8_t)(0x70u+(op2&0xFu)));if(take)regs[(m>>3)&7]=v;}
+    eip=ip;return 0;
+   }
+   if(op2>=0x90u&&op2<=0x9Fu){ /* SETcc r/m8 */
+    uint8_t m=MEM8(ip++),v=cond((uint8_t)(0x70u+(op2&0xFu)))?1u:0u;
+    if((m>>6)==3)reg8_write(m&7u,v);else{uint32_t ea=0;if(!modrm_ea(m,&ip,&ea)){cpu_error=0x0F00u|op2;return -19;}wr8(ea,v);}
+    eip=ip;return 0;
+   }
+   if(op2==0xBF){uint8_t m=MEM8(ip++);uint16_t v;if((m>>6)==3)v=reg16_read(m&7u);else{uint32_t ea=0;if(!modrm_ea(m,&ip,&ea)){cpu_error=0x0FBFu;return -17;}v=rd16(ea);}regs[(m>>3)&7]=(uint32_t)(int32_t)(int16_t)v;eip=ip;return 0;} /* MOVSX r32,r/m16 */
+   if(op2==0xBC||op2==0xBD){ /* BSF/BSR */
+    uint8_t m=MEM8(ip++);uint32_t v=modrm_read32(m,&ip);
+    if(v==0){eflags|=ZF;}
+    else{uint32_t i=0;if(op2==0xBC){while(!((v>>i)&1u))i++;}else{i=31;while(!((v>>i)&1u))i--;}regs[(m>>3)&7]=i;eflags&=~ZF;}
+    eip=ip;return 0;
+   }
+   if(op2>=0xC8u&&op2<=0xCFu){uint32_t v=regs[op2-0xC8u];regs[op2-0xC8u]=(v>>24)|((v>>8)&0xFF00u)|((v<<8)&0xFF0000u)|(v<<24);eip=ip;return 0;} /* BSWAP */
+   if(op2==0xC1){ /* XADD r/m32,r32 */
+    uint8_t m=MEM8(ip++);uint32_t ea=0,d,s0=regs[(m>>3)&7];
+    if((m>>6)==3)d=regs[m&7];else{if(!modrm_ea(m,&ip,&ea)){cpu_error=0x0FC1u;return -19;}d=rd32(ea);}
+    uint32_t r=d+s0;set_add_flags_width(d,s0,r,32u);
+    regs[(m>>3)&7]=d;if((m>>6)==3)regs[m&7]=r;else wr32(ea,r);
+    eip=ip;return 0;
+   }
+   if(op2==0xA4||op2==0xA5||op2==0xAC||op2==0xAD){ /* SHLD/SHRD r/m32,r32,imm8|CL */
+    uint8_t m=MEM8(ip++);uint32_t ea=0,d,s0=regs[(m>>3)&7];
+    if((m>>6)==3)d=regs[m&7];else{if(!modrm_ea(m,&ip,&ea)){cpu_error=0x0F00u|op2;return -19;}d=rd32(ea);}
+    uint8_t c=(uint8_t)(((op2==0xA4)||(op2==0xAC))?MEM8(ip++):(uint8_t)regs[R_ECX]);c&=31u;
+    if(c){
+     uint32_t r,cf;
+     if(op2==0xA4||op2==0xA5){r=(d<<c)|(s0>>(32u-c));cf=(d>>(32u-c))&1u;}
+     else{r=(d>>c)|(s0<<(32u-c));cf=(d>>(c-1u))&1u;}
+     set_logic_flags_width(r,32u);
+     eflags=(eflags&~(CF|OF))|(cf?CF:0u)|((c==1u&&(((d^r)>>31)&1u))?OF:0u);
+     if((m>>6)==3)regs[m&7]=r;else wr32(ea,r);
+    }
+    eip=ip;return 0;
+   }
    if(op2==0x44){uint8_t m=MEM8(ip++);uint32_t v=modrm_read32(m,&ip);if(eflags&ZF)regs[(m>>3)&7]=v;eip=ip;return 0;}
    if(op2==0x90||op2==0x92){uint8_t m=MEM8(ip++);uint8_t v=(op2==0x90)?((eflags&OF)?1u:0u):((eflags&CF)?1u:0u);if((m>>6)==3)reg8_write(m&7u,v);else{uint32_t ea=0;if(!modrm_ea(m,&ip,&ea)){cpu_error=0x0F00u|op2;return -19;}wr8(ea,v);}eip=ip;return 0;}
    if(op2==0x94){uint8_t m=MEM8(ip++),v=(eflags&ZF)?1u:0u;if((m>>6)==3)reg8_write(m&7u,(uint8_t)v);else{uint32_t ea=0;if(!modrm_ea(m,&ip,&ea)){cpu_error=0x0F94u;return -19;}wr8(ea,(uint8_t)v);}eip=ip;return 0;}
@@ -2424,7 +2529,7 @@ static int cpu_step_legacy(void){
    eip=ip;return 0;
   }
   case 0xC9:{uint32_t v;regs[R_ESP]=regs[R_EBP];if(!x86_stack_pop32(&v))return -44;regs[R_EBP]=v;eip=ip;return 0;} /* LEAVE */
-  case 0xC2:{uint16_t n=rd16(ip);ip+=2;uint32_t v;if(!x86_stack_pop32(&v))return -45;if(!x86_stack_discard(n))return -46;eip=v;return 0;} /* RET imm16 */
+  case 0xC2:{uint16_t n=rd16(ip);ip+=2;uint32_t v,esp0=regs[R_ESP];if(!x86_stack_pop32(&v))return -45;x86_shadow_ret(eip,v,esp0);if(!x86_stack_discard(n))return -46;eip=v;return 0;} /* RET imm16 */
   case 0xFF: { /* Group 5: INC/DEC/CALL/JMP/PUSH r/m32 subset. */
    uint8_t m=MEM8(ip++);
    uint8_t sub=(m>>3)&7;
@@ -2480,22 +2585,28 @@ static int cpu_step_legacy(void){
     x86_gdr_note_call(ea);
     if(!x86_stack_push32(next))return -57;
     if(call_builtin(target)){eip=next;regs[R_ESP]+=4u;return 0;}
-    eip=target;return 0;
+    eip=target;x86_shadow_call(eip_before_site,next,target);return 0;
    }
    /* FF /4 JMP is frequently used by PE import thunks. Record the import
     * call and, if resolved to a host/API shim, execute it before returning
     * through the thunk's existing caller return address. */
    x86_gdr_note_call(ea);
+   /* A JMP thunk runs with the caller's return address on top of the stack. Host shims and xapi
+    * handlers remove stdcall arguments from ESP before returning, so the return address has to be
+    * read BEFORE the handler runs; reading it afterwards picked up the last argument instead. */
+   uint32_t thunk_ret=0,thunk_sp=regs[R_ESP];
+   if(!x86_mem_region_find(thunk_sp,4u,X86_MEM_READ))thunk_sp=0;else thunk_ret=rd32(thunk_sp);
    if(call_builtin(target)){
-    uint32_t ret;
-    if(!x86_stack_pop32(&ret))return -57;
-    eip=ret;
+    if(!thunk_sp){x86_mem_faults++;cpu_error=0xE002u;return -57;}
+    x86_shadow_ret(eip,thunk_ret,thunk_sp);
+    regs[R_ESP]+=4u;
+    eip=thunk_ret;
     return 0;
    }
    eip=target;return 0;
   }
-  case 0xC3:{uint32_t v;if(!x86_stack_pop32(&v))return -49;eip=v;return 0;} /* RET */
-  case 0xE8:{int32_t d=(int32_t)rd32(ip);uint32_t next=ip+4;if(!x86_stack_push32(next))return -50;eip=next+(uint32_t)d;return 0;} /* CALL rel32 */
+  case 0xC3:{uint32_t v,esp0=regs[R_ESP];if(!x86_stack_pop32(&v))return -49;x86_shadow_ret(eip,v,esp0);eip=v;return 0;} /* RET */
+  case 0xE8:{int32_t d=(int32_t)rd32(ip);uint32_t next=ip+4;if(!x86_stack_push32(next))return -50;eip=next+(uint32_t)d;x86_shadow_call(eip_before_site,next,eip);return 0;} /* CALL rel32 */
   default: cpu_error=op; return -10;
  }
 }
@@ -2793,7 +2904,9 @@ __attribute__((export_name("x86_dll_get_import_failed"))) uint32_t x86_dll_get_i
 __attribute__((export_name("x86_run"))) int x86_run(int32_t max_steps){
  if(!loaded)return -20; if(halted)return 1; if(max_steps<1)max_steps=1;
  for(int32_t i=0;i<max_steps&&!halted;i++){
+  uint32_t espw_eip=eip;
   int r=cpu_step();
+  {uint32_t e=regs[R_ESP],d=e>espw_prev?e-espw_prev:espw_prev-e;if(espw_prev&&d>0x10000u)x86_espw_event(espw_eip,espw_prev,e);espw_prev=e;}
   if(r<0){
    /* A CPU fault is terminal for this run, but the machine state remains
     * intact for diagnostics: EIP, decoded opcode, trace, registers, stack,
@@ -2805,6 +2918,29 @@ __attribute__((export_name("x86_run"))) int x86_run(int32_t max_steps){
  }
  return halted?1:0;
 }
+
+/* ---- diagnostics: stack ---- */
+__attribute__((export_name("x86_get_trace_post_esp"))) uint32_t x86_get_trace_post_esp(uint32_t i){return i<X86_TRACE_DEPTH?trace_post_esp[i]:0;}
+__attribute__((export_name("x86_get_trace_post_ebp"))) uint32_t x86_get_trace_post_ebp(uint32_t i){return i<X86_TRACE_DEPTH?trace_post_ebp[i]:0;}
+__attribute__((export_name("x86_get_shadow_stat"))) uint32_t x86_get_shadow_stat(uint32_t f){
+ switch(f){case 0:return sh_top;case 1:return sh_overflow;case 2:return sh_calls;case 3:return sh_rets;case 4:return sh_mm_count;case 5:return sh_um_count;case 6:return espw_count;}
+ return 0;}
+/* kind: 0 first mismatch, 1 last mismatch, 2 first unmatched, 3 last unmatched; field 0..7 = ret_eip,target,esp,expected esp,callee,site,steps,depth */
+__attribute__((export_name("x86_get_shadow_event"))) uint32_t x86_get_shadow_event(uint32_t kind,uint32_t f){
+ if(f>=8u)return 0;
+ switch(kind){case 0:return sh_mm[f];case 1:return sh_mm_last[f];case 2:return sh_um[f];case 3:return sh_um_last[f];}
+ return 0;}
+/* i = frame index from the bottom of the shadow stack; field 0 callee, 1 call site, 2 return address, 3 esp after push */
+__attribute__((export_name("x86_get_shadow_frame"))) uint32_t x86_get_shadow_frame(uint32_t i,uint32_t f){
+ if(i>=sh_top||i>=X86_SHADOW_DEPTH)return 0;
+ switch(f){case 0:return sh_callee[i];case 1:return sh_site[i];case 2:return sh_ret[i];case 3:return sh_esp[i];}
+ return 0;}
+__attribute__((export_name("x86_get_espw_event"))) uint32_t x86_get_espw_event(uint32_t k,uint32_t f){return (k<X86_ESPW_EVENTS&&f<6u)?espw_ev[k][f]:0;}
+/* field 0 eip, 1 opcode, 2 esp, 3 ebp */
+__attribute__((export_name("x86_get_espw_snap"))) uint32_t x86_get_espw_snap(uint32_t k,uint32_t i,uint32_t f){
+ if(k>=X86_ESPW_EVENTS||i>=X86_ESPW_SNAP)return 0;
+ switch(f){case 0:return espw_snap_eip[k][i];case 1:return espw_snap_op[k][i];case 2:return espw_snap_esp[k][i];case 3:return espw_snap_ebp[k][i];}
+ return 0;}
 __attribute__((export_name("x86_get_eip"))) uint32_t x86_get_eip(void){return eip;}
 __attribute__((export_name("x86_get_flow_count"))) uint32_t x86_get_flow_count(void){return x86_flow_count;}
 __attribute__((export_name("x86_get_flow_eip"))) uint32_t x86_get_flow_eip(uint32_t i){if(i>=x86_flow_count)return 0;return x86_flow_eip[(x86_flow_head+x86_flow_count-1u-i)%X86_FLOW_DEPTH];}
