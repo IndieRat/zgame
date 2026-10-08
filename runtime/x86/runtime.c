@@ -1398,7 +1398,7 @@ static void gl_draw_triangle(void){
 }
 
 
-static uint32_t call_builtin(uint32_t target){
+static uint32_t call_builtin_impl(uint32_t target){
  if(target>=API_XAPI_BASE&&target<API_XAPI_BASE+xapi_count*4u)return xapi_call((target-API_XAPI_BASE)>>2);
  if(target>=API_SHIM_BASE&&target<API_SHIM_BASE+SHIM_COUNT*4u){
   crt_last_shim_caller=eip;
@@ -1610,6 +1610,23 @@ static uint32_t call_builtin(uint32_t target){
   return 1;
  }
  return 0;
+}
+
+/* ---- API call log: the last X86_APILOG_DEPTH calls into host-implemented imports ---------------- */
+#define X86_APILOG_DEPTH 128u
+static uint32_t apilog_target[X86_APILOG_DEPTH],apilog_caller[X86_APILOG_DEPTH],apilog_arg[X86_APILOG_DEPTH][4],apilog_ret[X86_APILOG_DEPTH],apilog_step[X86_APILOG_DEPTH];
+static uint32_t apilog_count=0;
+static uint32_t call_builtin(uint32_t target){
+ uint32_t sp=regs[R_ESP],a[4]={0,0,0,0},caller=0;
+ if(x86_mem_region_find(sp,20u,X86_MEM_READ)){caller=rd32(sp);for(uint32_t i=0;i<4u;i++)a[i]=rd32(sp+4u+i*4u);}
+ uint32_t r=call_builtin_impl(target);
+ if(r){
+  uint32_t k=apilog_count%X86_APILOG_DEPTH;
+  apilog_target[k]=target;apilog_caller[k]=caller;apilog_ret[k]=regs[R_EAX];apilog_step[k]=steps;
+  for(uint32_t i=0;i<4u;i++)apilog_arg[k][i]=a[i];
+  apilog_count++;
+ }
+ return r;
 }
 
 static uint16_t rd16(uint32_t p){return (uint16_t)MEM8(p)|((uint16_t)MEM8(p+1)<<8);}
@@ -2859,7 +2876,7 @@ static int load_pe(uint32_t f,uint32_t sz){
 /* A PE entrypoint is invoked by the runtime rather than by a guest CALL. Seed a
  * synthetic return address so C fixtures whose entrypoint is main() can RET cleanly. */
 if(!x86_stack_push32(X86_ENTRY_RETURN_SENTINEL)){loaded=0;load_error=16;return-7;}
-guest_heap=GUEST_HEAP_BASE;halted=0;cpu_error=0;steps=0;eflags=0x2;decoded_prefixes=0;decoded_operand16=0;last_decoded_map=0;last_decoded_opcode=0;last_decoded_length=0;last_decoded_modrm=0;last_decoded_has_modrm=0;last_dispatch_id=0;last_dispatch_count=0;last_indirect_slot=0;last_indirect_target=0;last_unresolved_gdr=0xFFFFFFFFu;
+apilog_count=0;{uint32_t iend=image_base+image_size;guest_heap=(iend>GUEST_HEAP_BASE&&iend<GUEST_HEAP_LIMIT)?((iend+0xFFFu)&~0xFFFu):GUEST_HEAP_BASE;}halted=0;cpu_error=0;steps=0;eflags=0x2;decoded_prefixes=0;decoded_operand16=0;last_decoded_map=0;last_decoded_opcode=0;last_decoded_length=0;last_decoded_modrm=0;last_decoded_has_modrm=0;last_dispatch_id=0;last_dispatch_count=0;last_indirect_slot=0;last_indirect_target=0;last_unresolved_gdr=0xFFFFFFFFu;
 x86_first_fault_eip=0;x86_last_fault_eip=0;x86_first_fault_count=0;
 x86_control_fault_kind=0;x86_control_fault_eip=0;x86_control_fault_next_eip=0;x86_control_fault_target=0;x86_control_fault_slot=0;x86_control_fault_opcode=0;x86_control_fault_modrm=0;
 x86_trace_reset();x86_profile_clear();
@@ -2942,6 +2959,24 @@ __attribute__((export_name("x86_get_espw_snap"))) uint32_t x86_get_espw_snap(uin
  if(k>=X86_ESPW_EVENTS||i>=X86_ESPW_SNAP)return 0;
  switch(f){case 0:return espw_snap_eip[k][i];case 1:return espw_snap_op[k][i];case 2:return espw_snap_esp[k][i];case 3:return espw_snap_ebp[k][i];}
  return 0;}
+
+__attribute__((export_name("x86_get_apilog_count"))) uint32_t x86_get_apilog_count(void){return apilog_count;}
+/* i counts back from the newest call (0 = newest). field: 0 target,1 caller,2 ret,3 step,4..7 args */
+__attribute__((export_name("x86_get_apilog"))) uint32_t x86_get_apilog(uint32_t i,uint32_t f){
+ if(i>=apilog_count||i>=X86_APILOG_DEPTH)return 0;
+ uint32_t k=(apilog_count-1u-i)%X86_APILOG_DEPTH;
+ switch(f){case 0:return apilog_target[k];case 1:return apilog_caller[k];case 2:return apilog_ret[k];case 3:return apilog_step[k];}
+ return (f>=4u&&f<8u)?apilog_arg[k][f-4u]:0;}
+/* name character j of the shim behind entry i (0 when the call was not a table shim or j is past the end) */
+__attribute__((export_name("x86_get_apilog_name_char"))) uint32_t x86_get_apilog_name_char(uint32_t i,uint32_t j){
+ if(i>=apilog_count||i>=X86_APILOG_DEPTH)return 0;
+ uint32_t t=apilog_target[(apilog_count-1u-i)%X86_APILOG_DEPTH];
+ if(t<API_SHIM_BASE)return 0;
+ uint32_t idx=(t-API_SHIM_BASE)>>2;
+ if(idx>=sizeof(shim_tab)/sizeof(shim_tab[0]))return 0;
+ const char*n=shim_tab[idx].name;
+ for(uint32_t q=0;q<=j;q++){if(!n[q])return 0;}
+ return (uint8_t)n[j];}
 __attribute__((export_name("x86_get_eip"))) uint32_t x86_get_eip(void){return eip;}
 __attribute__((export_name("x86_get_flow_count"))) uint32_t x86_get_flow_count(void){return x86_flow_count;}
 __attribute__((export_name("x86_get_flow_eip"))) uint32_t x86_get_flow_eip(uint32_t i){if(i>=x86_flow_count)return 0;return x86_flow_eip[(x86_flow_head+x86_flow_count-1u-i)%X86_FLOW_DEPTH];}
