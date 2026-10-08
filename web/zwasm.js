@@ -205,7 +205,7 @@ class GuestRuntime {
     this.reader = reader; this.module = module; this.instance = null; this.memory = null;
     this.running = false; this.inputQueue = []; this.audio = null; this.ctx2d = null; this.imageData = null;
     this.xapiTable = new Map(); this.zapiTable = new Map(); this.zdlls = new Map(); this.xapiUnsupported = new Map(); this.diagShown = false;
-    this.unresolved = new Map(); this.pendingFns = [];
+    this.unresolved = new Map(); this.pendingDll = "";
   }
 
   mem() { return new Uint8Array(this.instance.exports.memory.buffer); }
@@ -233,9 +233,9 @@ class GuestRuntime {
     resize(640, 360);
     env.z_host_log = (level, ptr, len) => {
       const text = readString(ptr, Math.min(len >>> 0, 4096));
-      if (level === 2) { // runtime reports each unresolved import as a function line plus a DLL line
-        if (/\.dll$/i.test(text)) { const g = self.unresolved.get(text) || []; g.push(...self.pendingFns); self.pendingFns = []; self.unresolved.set(text, g); }
-        else self.pendingFns.push(text);
+      if (level === 2) { // runtime reports each unresolved import as two lines: the DLL, then the function
+        if (/\.dll$/i.test(text)) self.pendingDll = text;
+        else { const g = self.unresolved.get(self.pendingDll || "?") || new Set(); g.add(text); self.unresolved.set(self.pendingDll || "?", g); }
         return;
       }
       log("x86[" + level + "]: " + text);
@@ -524,9 +524,10 @@ class GuestRuntime {
   reportUnresolved() {
     if (!this.unresolved.size) return;
     let total = 0;
-    for (const [dll, fns] of [...this.unresolved].sort((a, b) => b[1].length - a[1].length)) {
+    for (const [dll, set] of [...this.unresolved].sort((a, b) => b[1].size - a[1].size)) {
+      const fns = [...set];
       total += fns.length;
-      log("unresolved " + dll + ": " + fns.length + " (" + fns.slice(0, 6).join(", ") + (fns.length > 6 ? ", ..." : "") + ")");
+      log("unresolved " + dll + ": " + fns.length + " (" + fns.slice(0, 8).join(", ") + (fns.length > 8 ? ", ..." : "") + ")");
     }
     log("unresolved total: " + total);
   }
@@ -543,6 +544,7 @@ class GuestRuntime {
     if (ex.x86_get_flow_count) { const n=Math.min(ex.x86_get_flow_count(),16); for(let i=0;i<n;i++) log("diag: flow[-"+i+"] eip="+hex(ex.x86_get_flow_eip(i))+" op="+hex(ex.x86_get_flow_opcode(i))+" esp="+hex(ex.x86_get_flow_esp(i))+" ebp="+hex(ex.x86_get_flow_ebp(i))); }
     log("diag: memory faults=" + ex.x86_get_memory_faults() + " first fault eip=" + hex(ex.x86_get_first_fault_eip()) + " last fault eip=" + hex(ex.x86_get_last_fault_eip()) + " last fault addr=" + hex(ex.x86_get_last_memory_fault_address()) + " size=" + ex.x86_get_last_memory_fault_size() + " kind=" + ex.x86_get_last_memory_fault_kind());
     for (const line of ZWASMHost.formatTrace(ex, 16)) log("diag: " + line);
+    for (const line of ZWASMHost.formatApiLog(ex, 40)) log("diag: " + line);
     if (ex.x86_get_shadow_stat) {
       const st = (n) => ex.x86_get_shadow_stat(n);
       log("diag: shadow stack depth=" + st(0) + " calls=" + st(2) + " rets=" + st(3) + " unbalanced rets=" + st(4) + " unmatched rets=" + st(5) + " esp jumps=" + st(6));
