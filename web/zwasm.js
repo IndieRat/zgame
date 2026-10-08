@@ -465,6 +465,8 @@ class GuestRuntime {
     const pe = await this.reader.readEntry(guest.path);
     const ptr = this.allocCopy(pe);
     const rc = ex.x86_load_pe(ptr, pe.length);
+    this.guestPe = pe;
+    this.verifyImage("after PE load");
     log("x86 PE load rc=" + rc + " bytes=" + fmtBytes(pe.length));
     if (rc !== 0) throw new Error("x86_load_pe failed rc=" + rc + " load_error=" + (ex.x86_get_load_error?.() ?? "?"));
 
@@ -507,9 +509,16 @@ class GuestRuntime {
 
     log("imports: " + ex.x86_get_import_resolved() + "/" + ex.x86_get_import_count() + " resolved, " + ex.x86_get_import_failed() + " failed · xapi functions: " + ex.x86_get_xapi_count());
 
+    this.verifyImage("before run");
     this.running = true; $("#runtimeState").textContent = "RUNNING"; setStatus("Running");
     log("x86 runtime online; image base=0x" + (ex.x86_get_image_base?.() ?? 0).toString(16));
     this.loop();
+  }
+
+  verifyImage(label) {
+    if (!this.guestPe || !this.instance) return;
+    const base = this.instance.exports.x86_get_image_base ? this.instance.exports.x86_get_image_base() : 0x400000;
+    for (const line of ZWASMHost.verifyImage(this.instance.exports.memory.buffer, this.guestPe, base)) log("image " + label + ": " + line);
   }
 
   reportUnresolved() {
@@ -532,6 +541,8 @@ class GuestRuntime {
     if (ex.x86_get_esp) log("diag: GPR ESP="+hex(ex.x86_get_esp())+" EBP="+hex(ex.x86_get_ebp?.() ?? 0)+" stack=["+hex(ex.x86_get_stack_region_base?.() ?? 0)+".."+hex(ex.x86_get_stack_region_top?.() ?? 0)+"]");
     if (ex.x86_get_last_stack_fault_esp) log("diag: stack fault kind="+ex.x86_get_last_stack_fault_kind()+" esp="+hex(ex.x86_get_last_stack_fault_esp())+" eip="+hex(ex.x86_get_last_stack_fault_eip()));
     if (ex.x86_get_flow_count) { const n=Math.min(ex.x86_get_flow_count(),16); for(let i=0;i<n;i++) log("diag: flow[-"+i+"] eip="+hex(ex.x86_get_flow_eip(i))+" op="+hex(ex.x86_get_flow_opcode(i))+" esp="+hex(ex.x86_get_flow_esp(i))+" ebp="+hex(ex.x86_get_flow_ebp(i))); }
+    log("diag: memory faults=" + ex.x86_get_memory_faults() + " first fault eip=" + hex(ex.x86_get_first_fault_eip()) + " last fault eip=" + hex(ex.x86_get_last_fault_eip()) + " last fault addr=" + hex(ex.x86_get_last_memory_fault_address()) + " size=" + ex.x86_get_last_memory_fault_size() + " kind=" + ex.x86_get_last_memory_fault_kind());
+    for (const line of ZWASMHost.formatTrace(ex, 16)) log("diag: " + line);
     if (ex.x86_get_shadow_stat) {
       const st = (n) => ex.x86_get_shadow_stat(n);
       log("diag: shadow stack depth=" + st(0) + " calls=" + st(2) + " rets=" + st(3) + " unbalanced rets=" + st(4) + " unmatched rets=" + st(5) + " esp jumps=" + st(6));
