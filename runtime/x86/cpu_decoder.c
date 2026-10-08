@@ -140,8 +140,7 @@ static void x86_decode_payload_size(x86_decoded_t *d) {
         x86_id_is(id, "SUB_EAX_IMM32") ||
         x86_id_is(id, "CMP_EAX_IMM32") ||
         x86_id_is(id, "PUSH_IMM32")) d->imm_size = 4;
-    else if (x86_id_is(id, "ROL_RM8_IMM8") || x86_id_is(id, "ROR_RM8_IMM8") || x86_id_is(id, "RCL_RM8_IMM8") || x86_id_is(id, "RCR_RM8_IMM8") || x86_id_is(id, "SHL_RM8_IMM8") || x86_id_is(id, "SHR_RM8_IMM8") || x86_id_is(id, "SAL_RM8_IMM8") || x86_id_is(id, "SAR_RM8_IMM8") || x86_id_is(id, "ROL_RM32_IMM8") || x86_id_is(id, "ROR_RM32_IMM8") || x86_id_is(id, "RCL_RM32_IMM8") || x86_id_is(id, "RCR_RM32_IMM8") || x86_id_is(id, "SHL_RM32_IMM8") || x86_id_is(id, "SHR_RM32_IMM8") || x86_id_is(id, "SAL_RM32_IMM8") || x86_id_is(id, "SAR_RM32_IMM8") ||
-             x86_id_is(id, "ROL_RM8_CL") || x86_id_is(id, "ROR_RM8_CL") || x86_id_is(id, "RCL_RM8_CL") || x86_id_is(id, "RCR_RM8_CL") || x86_id_is(id, "SHL_RM8_CL") || x86_id_is(id, "SHR_RM8_CL") || x86_id_is(id, "SAL_RM8_CL") || x86_id_is(id, "SAR_RM8_CL") || x86_id_is(id, "ROL_RM32_CL") || x86_id_is(id, "ROR_RM32_CL") || x86_id_is(id, "RCL_RM32_CL") || x86_id_is(id, "RCR_RM32_CL") || x86_id_is(id, "SHL_RM32_CL") || x86_id_is(id, "SHR_RM32_CL") || x86_id_is(id, "SAL_RM32_CL") || x86_id_is(id, "SAR_RM32_CL")) d->imm_size = 1;
+    else if (x86_id_is(id, "ROL_RM8_IMM8") || x86_id_is(id, "ROR_RM8_IMM8") || x86_id_is(id, "RCL_RM8_IMM8") || x86_id_is(id, "RCR_RM8_IMM8") || x86_id_is(id, "SHL_RM8_IMM8") || x86_id_is(id, "SHR_RM8_IMM8") || x86_id_is(id, "SAL_RM8_IMM8") || x86_id_is(id, "SAR_RM8_IMM8") || x86_id_is(id, "ROL_RM32_IMM8") || x86_id_is(id, "ROR_RM32_IMM8") || x86_id_is(id, "RCL_RM32_IMM8") || x86_id_is(id, "RCR_RM32_IMM8") || x86_id_is(id, "SHL_RM32_IMM8") || x86_id_is(id, "SHR_RM32_IMM8") || x86_id_is(id, "SAL_RM32_IMM8") || x86_id_is(id, "SAR_RM32_IMM8")) d->imm_size = 1; /* CL and by-1 forms carry no immediate */
     else if (x86_id_is(id, "ADD_RM32_IMM8") ||
              x86_id_is(id, "AND_RM32_IMM8") ||
              x86_id_is(id, "SUB_RM32_IMM8") ||
@@ -158,6 +157,9 @@ static void x86_decode_payload_size(x86_decoded_t *d) {
              x86_id_is(id, "RCL_RM32_IMM8") ||
              x86_id_is(id, "RCR_RM32_IMM8") ||
              x86_id_is(id, "IMUL_R32_RM32_IMM8") ||
+             x86_id_is(id, "TEST_RM8_IMM8") ||
+             x86_id_is(id, "SHLD_RM32_R32_IMM8") ||
+             x86_id_is(id, "SHRD_RM32_R32_IMM8") ||
              x86_id_is(id, "BT_RM32_IMM8") ||
              x86_id_is(id, "BTS_RM32_IMM8") ||
              x86_id_is(id, "BTR_RM32_IMM8") ||
@@ -356,7 +358,12 @@ static int x86_decode_instruction(x86_decoded_t *d) {
             !x86_id_is(d->entry->id, "CMP_EAX_IMM32") &&
             !x86_id_is(d->entry->id, "MOV_RM16_SREG") &&
             !x86_id_is(d->entry->id, "MOV_SREG_RM16") &&
-            !x86_id_is(d->entry->id, "MOVZX_R32_RM16")) {
+            !x86_id_is(d->entry->id, "MOVZX_R32_RM16") &&
+            !x86_id_is(d->entry->id, "MOV_RM32_R32") &&
+            !x86_id_is(d->entry->id, "MOV_R32_RM32") &&
+            !x86_id_is(d->entry->id, "NOP_RM32") &&
+            !(d->opcode == 0x90 && d->map == 0) && /* 66 90: two-byte NOP */
+            !x86_id_is(d->entry->id, "MOVSX_R32_RM16")) {
             cpu_error = 0xD100u | d->opcode;
             return -3;
         }
@@ -601,7 +608,7 @@ static int cpu_step(void) {
             x86_id_is(d.entry->id,"IMUL_RM32") ||
             x86_id_is(d.entry->id,"DIV_RM32") ||
             x86_id_is(d.entry->id,"IDIV_RM32")) {
-            uint32_t op_ip=d.cursor-d.disp_size-(d.has_sib?1u:0u), ea=0;
+            uint32_t op_ip=d.op_pos+2u, ea=0; /* just past the ModR/M byte; independent of trailing immediates */
             uint8_t sub=(uint8_t)((d.modrm>>3)&7u);
             if ((d.modrm>>6)!=3) modrm_ea(d.modrm,&op_ip,&ea);
             uint32_t v=(d.modrm>>6)==3 ? regs[d.modrm&7u] : rd32(ea);
