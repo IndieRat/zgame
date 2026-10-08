@@ -2731,33 +2731,43 @@ static int x86_dll_find_loaded(uint32_t p){for(uint32_t i=0;i<X86_DLL_MAX_MODULE
 static int x86_dll_ascii_module_name(uint32_t p){if(!p)return 0;uint32_t b=x86_dll_basename_ptr(p),i=0;while(i<95u&&MEM8(b+i)){char c=(char)MEM8(b+i);if(c>='A'&&c<='Z')c=(char)(c-'A'+'a');if(c=='.'&&MEM8(b+i+1u)=='e'&&MEM8(b+i+2u)=='x'&&MEM8(b+i+3u)=='e'&&MEM8(b+i+4u)==0)return 1;i++;}return 0;}
 static uint32_t x86_dll_module_for_wide_name(uint32_t p){
  if(!p)return image_base;
- char s[96],base[96];uint32_t i=0,b=0;
- for(;i<95u&&MEM8(p+i*2u);i++){
-  uint16_t w=rd16(p+i*2u);char c=(char)(w<128u?w:'?');
+ char s[128],base[128];uint32_t i=0,b=0;
+ for(;i<127u;i++){
+  uint16_t w=rd16(p+i*2u);
+  if(w==0)break;
+  char c=(char)(w<128u?w:'?');
   if(c>='A'&&c<='Z')c=(char)(c-'A'+'a');
   s[i]=c;
   if(c=='/'||c=='\\')b=i+1u;
  }
  s[i]=0;
  if(!s[0])return image_base;
- uint32_t bl=0;for(uint32_t k=b;k<i&&bl<95u;k++,bl++)base[bl]=s[k];base[bl]=0;
- /* GetModuleHandleW accepts either a full path or a module basename. */
+ uint32_t bl=0;for(uint32_t k=b;k<i&&bl<127u;k++,bl++)base[bl]=s[k];base[bl]=0;
  for(uint32_t j=0;j<X86_DLL_MAX_MODULES;j++){
   if(!x86_dll_modules[j].active)continue;
-  const char *n=x86_dll_modules[j].requested_name;
-  if(x86_dll_cname_equal(s,n)||x86_dll_cname_equal(base,n))return x86_dll_modules[j].base;
+  if(x86_dll_cname_equal(s,x86_dll_modules[j].requested_name)||
+     x86_dll_cname_equal(base,x86_dll_modules[j].requested_name))
+   return x86_dll_modules[j].base;
  }
- /* The current PE image is the process's main module. A module name ending in
-  * .exe identifies it even when the guest supplies a full Windows path. */
- for(uint32_t k=0;k<bl;k++){
-  if(base[k]=='.'&&k+4u<bl&&base[k+1u]=='e'&&base[k+2u]=='x'&&base[k+3u]=='e'&&base[k+4u]==0)return image_base;
+ /* CRT startup asks for the process image before it has a conventional
+  * module-table entry. Resolve the executable name directly to image_base. */
+ for(uint32_t k=0;k+4u<bl;k++)
+  if(base[k]=='.'&&base[k+1u]=='e'&&base[k+2u]=='x'&&base[k+3u]=='e'&&base[k+4u]==0)
+   return image_base;
+ /* Some CRTs pass the image name without an extension. A pointer into the
+  * loaded PE is a strong indication that this is one of those startup names. */
+ if(p>=image_base&&p<image_base+image_size){
+  int has_dot=0,has_path=0;
+  for(uint32_t k=0;k<bl;k++){if(base[k]=='.')has_dot=1;if(base[k]=='/'||base[k]=='\\')has_path=1;}
+  if(!has_dot||has_path)return image_base;
  }
- /* Windows also permits the main module name without its .exe suffix. */
- if(bl>0u){
-  uint32_t dot=0xFFFFFFFFu;
-  for(uint32_t k=0;k<bl;k++)if(base[k]=='.'){dot=k;break;}
-  if(dot==0xFFFFFFFFu)return image_base;
- }
+ /* Common Windows CRT startup aliases are represented by the host bridge;
+  * give them a stable nonzero module handle rather than failing startup. */
+ if(x86_dll_cname_equal(base,"kernel32.dll")||
+    x86_dll_cname_equal(base,"kernelbase.dll")||
+    x86_dll_cname_equal(base,"user32.dll")||
+    x86_dll_cname_equal(base,"gdi32.dll"))
+  return image_base;
  return 0;
 }
 static int x86_dll_guest_name_equal(uint32_t a,uint32_t b){uint32_t i=0;if(!a||!b)return 0;while(MEM8(a+i)&&MEM8(b+i)){char x=(char)MEM8(a+i),y=(char)MEM8(b+i);if(x>='A'&&x<='Z')x=(char)(x-'A'+'a');if(y>='A'&&y<='Z')y=(char)(y-'A'+'a');if(x!=y)return 0;i++;}return MEM8(a+i)==0&&MEM8(b+i)==0;}
