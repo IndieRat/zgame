@@ -219,10 +219,16 @@ def build(args: argparse.Namespace) -> Path:
         pkg = "zwasm_guest/zapi/" + zapi_path.name
         zapi_packages.append(pkg)
         extra_roles.append((pkg, zapi_path, "zapi"))
+    seen_zdlls: set[str] = set()
     for item in args.zdll:
         zdll_path = Path(item).resolve()
         if not zdll_path.is_file():
             raise PackageError("zdll file does not exist: " + str(zdll_path))
+        zdll_key = zdll_path.name.lower()
+        if zdll_key in seen_zdlls:
+            print("[ZWASM] discard duplicate .zdll:", zdll_path.name)
+            continue
+        seen_zdlls.add(zdll_key)
         pkg = "zwasm_guest/zdlls/" + zdll_path.name
         zdll_packages.append(pkg)
         extra_roles.append((pkg, zdll_path, "zdll"))
