@@ -2796,7 +2796,11 @@ static int x86_dll_load_image(uint32_t f,uint32_t sz,uint32_t requested_name){
 }
 static int x86_dll_register(uint32_t name,uint32_t data,uint32_t size){
  uint32_t np=x86_dll_basename_ptr(name);if(!np||!size||!x86_mem_region_find(data,size,X86_MEM_READ)){x86_dll_last_error=11;return 0;}
- for(uint32_t i=0;i<X86_DLL_MAX_RESOURCES;i++)if(x86_dll_resources[i].active&&x86_dll_name_equal(np,x86_dll_resources[i].name)){x86_dll_resources[i].data=data;x86_dll_resources[i].size=size;return 1;}
+ for(uint32_t i=0;i<X86_DLL_MAX_RESOURCES;i++)if(x86_dll_resources[i].active&&x86_dll_name_equal(np,x86_dll_resources[i].name)){
+  /* Duplicate .zdll registration: keep the first valid resource and discard the later one. */
+  x86_dll_last_error=0;
+  return 1;
+}
  for(uint32_t i=0;i<X86_DLL_MAX_RESOURCES;i++)if(!x86_dll_resources[i].active){x86_dll_resources[i].active=1;x86_dll_resources[i].data=data;x86_dll_resources[i].size=size;uint32_t j=0;for(;j<95u&&j<sizeof(x86_dll_resources[i].name)-1u&&MEM8(np+j);j++)x86_dll_resources[i].name[j]=(char)MEM8(np+j);x86_dll_resources[i].name[j]=0;return 1;}
  x86_dll_last_error=12;return 0;
 }
