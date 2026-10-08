@@ -969,7 +969,7 @@ static uint32_t guest_alloc_raw(uint32_t n){
  X(GetCurrentDirectoryA,2,1) X(GlobalAlloc,2,1) X(GlobalLock,1,1) X(GlobalUnlock,1,1) \
  X(SetThreadExecutionState,1,1) X(SetThreadPriority,2,1) X(VirtualQuery,3,1) X(WriteConsoleA,5,1) \
  X(CreateEventW,4,1) X(SetEvent,1,1) X(ResetEvent,1,1) X(WaitForSingleObject,2,1) X(WaitForSingleObjectEx,3,1) \
- X(GetProcAddress,2,1) X(LoadLibraryA,1,1) X(FreeLibrary,1,1) X(GetFileAttributesA,1,1) \
+ X(GetProcAddress,2,1) X(LoadLibraryA,1,1) X(LoadLibraryW,1,1) X(FreeLibrary,1,1) X(GetFileAttributesA,1,1) \
  X(timeGetTime,0,1) X(timeBeginPeriod,1,1) X(timeEndPeriod,1,1) \
  X(_set_app_type,1,0) X(_configure_narrow_argv,1,0) X(_initialize_narrow_environment,0,0) \
  X(_get_initial_narrow_environment,0,0) X(__p___argc,0,0) X(__p___argv,0,0) X(__p__commode,0,0) \
@@ -1112,7 +1112,8 @@ static uint32_t shim_call(uint32_t idx){
    crt_last_termination_arg0=ARG(1);
    crt_exit_code=crt_last_termination_arg0;
    crt_exited=1u; halted=1; r=1; break;
-  case SHIM_GetModuleHandleA:case SHIM_GetModuleHandleW:r=ARG(0)?x86_dll_module_for_name(ARG(0)):image_base;break;
+  case SHIM_GetModuleHandleA:r=ARG(0)?x86_dll_module_for_name(ARG(0)):image_base;break;
+  case SHIM_GetModuleHandleW:r=ARG(0)?x86_dll_module_for_wide_name(ARG(0)):image_base;break;
   case SHIM_InitializeCriticalSectionAndSpinCount:case SHIM_TryEnterCriticalSection:r=1;break;
   case SHIM_TlsAlloc:r=(shim_tls_next<64u)?shim_tls_next++:0xFFFFFFFFu;break;
   case SHIM_TlsFree:case SHIM_FlsFree:r=1;break;
@@ -1132,6 +1133,7 @@ static uint32_t shim_call(uint32_t idx){
   case SHIM_CreateEventW:r=shim_handle++;break;
   case SHIM_GetProcAddress:r=x86_dll_get_proc(ARG(0),ARG(1));break;
   case SHIM_LoadLibraryA:r=x86_dll_load_registered(ARG(0));break;
+  case SHIM_LoadLibraryW:{uint32_t p=ARG(0),q=guest_alloc_raw(96),i=0;for(;i<95u&&MEM8(p+i*2u);i++){uint16_t w=rd16(p+i*2u);wr8(q+i,(uint8_t)(w<128u?w:'?'));}wr8(q+i,0);r=x86_dll_load_registered(q);break;}
   case SHIM_FreeLibrary:r=1;break;
   case SHIM_SetEvent:case SHIM_ResetEvent:case SHIM_SetThreadPriority:case SHIM_timeBeginPeriod:case SHIM_timeEndPeriod:r=1;break;
   case SHIM_timeGetTime:shim_qpc+=16u;r=shim_qpc/10000u*16u+1234u;break;
@@ -2724,6 +2726,8 @@ static int x86_dll_cname_equal(const char*a,const char*b){uint32_t i=0;if(!a||!b
 static int x86_dll_name_equal(uint32_t p,const char*n){uint32_t i=0;if(!p||!n)return 0;while(n[i]){char a=(char)MEM8(p+i),b=n[i];if(a>='A'&&a<='Z')a=(char)(a-'A'+'a');if(b>='A'&&b<='Z')b=(char)(b-'A'+'a');if(a!=b)return 0;i++;}return MEM8(p+i)==0;}
 static uint32_t x86_dll_basename_ptr(uint32_t p){uint32_t last=p;if(!p)return 0;for(uint32_t i=0;i<256u&&MEM8(p+i);i++)if(MEM8(p+i)=='/'||MEM8(p+i)=='\\')last=p+i+1u;return last;}
 static int x86_dll_find_loaded(uint32_t p){for(uint32_t i=0;i<X86_DLL_MAX_MODULES;i++)if(x86_dll_modules[i].active&&x86_dll_name_equal(p,x86_dll_modules[i].requested_name))return (int)i;return -1;}
+static int x86_dll_ascii_module_name(uint32_t p){if(!p)return 0;uint32_t b=x86_dll_basename_ptr(p),i=0;while(i<95u&&MEM8(b+i)){char c=(char)MEM8(b+i);if(c>='A'&&c<='Z')c=(char)(c-'A'+'a');if(c=='.'&&MEM8(b+i+1u)=='e'&&MEM8(b+i+2u)=='x'&&MEM8(b+i+3u)=='e'&&MEM8(b+i+4u)==0)return 1;i++;}return 0;}
+static uint32_t x86_dll_module_for_wide_name(uint32_t p){if(!p)return image_base;char s[96];uint32_t i=0;for(;i<95u&&MEM8(p+i*2u);i++){uint16_t w=rd16(p+i*2u);s[i]=(char)(w<128u?w:'?');}s[i]=0;if(!s[0])return image_base;for(uint32_t j=0;j<X86_DLL_MAX_MODULES;j++)if(x86_dll_modules[j].active&&x86_dll_cname_equal(s,x86_dll_modules[j].requested_name))return x86_dll_modules[j].base;return x86_dll_ascii_module_name((uint32_t)(uintptr_t)p)?image_base:0;}
 static int x86_dll_guest_name_equal(uint32_t a,uint32_t b){uint32_t i=0;if(!a||!b)return 0;while(MEM8(a+i)&&MEM8(b+i)){char x=(char)MEM8(a+i),y=(char)MEM8(b+i);if(x>='A'&&x<='Z')x=(char)(x-'A'+'a');if(y>='A'&&y<='Z')y=(char)(y-'A'+'a');if(x!=y)return 0;i++;}return MEM8(a+i)==0&&MEM8(b+i)==0;}
 static int x86_dll_apply_relocs(uint32_t base,uint32_t size,uint32_t preferred,uint32_t rva,uint32_t rsz){
  if(base==preferred)return 1;if(!rva||!rsz||rva>size||rsz>size-rva)return 0;
@@ -2809,7 +2813,7 @@ static uint32_t x86_dll_load_registered(uint32_t name){
  for(uint32_t i=0;i<X86_DLL_MAX_RESOURCES;i++)if(x86_dll_resources[i].active&&x86_dll_name_equal(np,x86_dll_resources[i].name)){int slot=x86_dll_load_image(x86_dll_resources[i].data,x86_dll_resources[i].size,np);if(slot>0){x86_dll_rebind_all();return x86_dll_modules[slot-1].base;}return 0;}
  x86_dll_last_error=13;return 0;
 }
-static uint32_t x86_dll_module_for_name(uint32_t name){int i=x86_dll_find_loaded(x86_dll_basename_ptr(name));return i>=0?x86_dll_modules[i].base:0;}
+static uint32_t x86_dll_module_for_name(uint32_t name){uint32_t p=x86_dll_basename_ptr(name);int i=x86_dll_find_loaded(p);if(i>=0)return x86_dll_modules[i].base;return x86_dll_ascii_module_name(p)?image_base:0;}
 static void x86_dll_rebind_all(void){if(loaded)scan_imports();}
 
 static int load_pe(uint32_t f,uint32_t sz){
