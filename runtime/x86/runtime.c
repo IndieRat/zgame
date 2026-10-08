@@ -2731,14 +2731,32 @@ static int x86_dll_find_loaded(uint32_t p){for(uint32_t i=0;i<X86_DLL_MAX_MODULE
 static int x86_dll_ascii_module_name(uint32_t p){if(!p)return 0;uint32_t b=x86_dll_basename_ptr(p),i=0;while(i<95u&&MEM8(b+i)){char c=(char)MEM8(b+i);if(c>='A'&&c<='Z')c=(char)(c-'A'+'a');if(c=='.'&&MEM8(b+i+1u)=='e'&&MEM8(b+i+2u)=='x'&&MEM8(b+i+3u)=='e'&&MEM8(b+i+4u)==0)return 1;i++;}return 0;}
 static uint32_t x86_dll_module_for_wide_name(uint32_t p){
  if(!p)return image_base;
- char s[96];uint32_t i=0;
- for(;i<95u&&MEM8(p+i*2u);i++){uint16_t w=rd16(p+i*2u);char c=(char)(w<128u?w:'?');if(c>='A'&&c<='Z')c=(char)(c-'A'+'a');s[i]=c;}
- s[i]=0;if(!s[0])return image_base;
- for(uint32_t j=0;j<X86_DLL_MAX_MODULES;j++)if(x86_dll_modules[j].active&&x86_dll_cname_equal(s,x86_dll_modules[j].requested_name))return x86_dll_modules[j].base;
- uint32_t b=0;for(uint32_t k=0;k<95u&&MEM8(p+k*2u);k++){uint16_t w=rd16(p+k*2u);if(w=='/'||w=='\\')b=k+1u;}
- for(uint32_t k=b;k<95u&&MEM8(p+k*2u);k++){
-  uint16_t w=rd16(p+k*2u);if(w>='A'&&w<='Z')w=(uint16_t)(w-'A'+'a');
-  if(w=='.'&&k+4u<95u){uint16_t e=rd16(p+(k+1u)*2u),x=rd16(p+(k+2u)*2u),e2=rd16(p+(k+3u)*2u),z=rd16(p+(k+4u)*2u);if(e>='A'&&e<='Z')e=(uint16_t)(e-'A'+'a');if(x>='A'&&x<='Z')x=(uint16_t)(x-'A'+'a');if(e2>='A'&&e2<='Z')e2=(uint16_t)(e2-'A'+'a');if(e=='e'&&x=='x'&&e2=='e'&&z==0)return image_base;}
+ char s[96],base[96];uint32_t i=0,b=0;
+ for(;i<95u&&MEM8(p+i*2u);i++){
+  uint16_t w=rd16(p+i*2u);char c=(char)(w<128u?w:'?');
+  if(c>='A'&&c<='Z')c=(char)(c-'A'+'a');
+  s[i]=c;
+  if(c=='/'||c=='\\')b=i+1u;
+ }
+ s[i]=0;
+ if(!s[0])return image_base;
+ uint32_t bl=0;for(uint32_t k=b;k<i&&bl<95u;k++,bl++)base[bl]=s[k];base[bl]=0;
+ /* GetModuleHandleW accepts either a full path or a module basename. */
+ for(uint32_t j=0;j<X86_DLL_MAX_MODULES;j++){
+  if(!x86_dll_modules[j].active)continue;
+  const char *n=x86_dll_modules[j].requested_name;
+  if(x86_dll_cname_equal(s,n)||x86_dll_cname_equal(base,n))return x86_dll_modules[j].base;
+ }
+ /* The current PE image is the process's main module. A module name ending in
+  * .exe identifies it even when the guest supplies a full Windows path. */
+ for(uint32_t k=0;k<bl;k++){
+  if(base[k]=='.'&&k+4u<bl&&base[k+1u]=='e'&&base[k+2u]=='x'&&base[k+3u]=='e'&&base[k+4u]==0)return image_base;
+ }
+ /* Windows also permits the main module name without its .exe suffix. */
+ if(bl>0u){
+  uint32_t dot=0xFFFFFFFFu;
+  for(uint32_t k=0;k<bl;k++)if(base[k]=='.'){dot=k;break;}
+  if(dot==0xFFFFFFFFu)return image_base;
  }
  return 0;
 }
@@ -2929,6 +2947,8 @@ loglit("XWASM X86 Runtime v0.9");
 loglit("PE32 + decoder CPU + guest memory regions + USER32/GDI32 + browser window/message/input + audio bridge");return 0;
 }
 __attribute__((export_name("x86_get_runtime_version"))) uint32_t x86_get_runtime_version(void){return 0x00090001u;}
+__attribute__((export_name("x86_get_last_module_handle_arg"))) uint32_t x86_get_last_module_handle_arg(void){return crt_last_shim_arg0;}
+__attribute__((export_name("x86_get_last_module_handle_result"))) uint32_t x86_get_last_module_handle_result(void){return (crt_last_shim_index==SHIM_GetModuleHandleA||crt_last_shim_index==SHIM_GetModuleHandleW)?regs[R_EAX]:0u;}
 __attribute__((export_name("x86_debug_probe"))) uint32_t x86_debug_probe(int32_t p){return rd16((uint32_t)p);}
 __attribute__((export_name("x86_load_pe"))) int x86_load_pe(int32_t p,int32_t n){return load_pe((uint32_t)p,(uint32_t)n);}
 __attribute__((export_name("x86_dll_register_image"))) int x86_dll_register_image(int32_t name,int32_t data,int32_t size){return x86_dll_register((uint32_t)name,(uint32_t)data,(uint32_t)size);}
