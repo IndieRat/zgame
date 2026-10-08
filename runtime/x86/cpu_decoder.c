@@ -277,6 +277,17 @@ static int x86_decode_instruction(x86_decoded_t *d) {
         return 0;
     }
 
+    /* MOVUPS is implemented by the CPU executor, but is not yet in the
+     * generated semantic table. Recognize the unprefixed 0F 10 /r and 0F 11 /r
+     * forms here so they reach that executor instead of failing decode with D010.
+     * Mandatory F2/F3 and operand-size 66 prefixes are left to their own forms. */
+    static const x86_decode_entry_t movups_load_entry = {1,0x10,1,-1,"MOVUPS_XMM_RM128",0,0};
+    static const x86_decode_entry_t movups_store_entry = {1,0x11,1,-1,"MOVUPS_RM128_XMM",0,0};
+    if (d->map == 1 && (d->prefixes & (X86_PREFIX_LOCK|X86_PREFIX_REPNZ|X86_PREFIX_REP|X86_PREFIX_OP16)) == 0) {
+        if (d->opcode == 0x10) d->entry = &movups_load_entry;
+        else if (d->opcode == 0x11) d->entry = &movups_store_entry;
+    }
+
     /* First locate an opcode candidate without consuming ModR/M. */
     if (!d->entry) d->entry = x86_find_entry(d->map, d->opcode, 0, 0, d->prefixes);
 
@@ -471,6 +482,48 @@ static int cpu_step(void) {
     last_decoded_modrm = d.has_modrm ? d.modrm : 0u;
     x86_copy_semantic_id(last_decoded_semantic_id,
                          (d.entry && d.entry->id) ? d.entry->id : "NONE");
+
+    /* 128-bit MOVUPS load/store. This dispatch is deliberately in the decoded
+     * CPU path: the legacy switch cannot handle 0F-prefixed instructions once the
+     * decoder has consumed the prefix/opcode pair. */
+    if (d.entry && (x86_id_is(d.entry->id,"MOVUPS_XMM_RM128") ||
+                    x86_id_is(d.entry->id,"MOVUPS_RM128_XMM"))) {
+        uint8_t m=d.modrm, reg=(uint8_t)((m>>3)&7u), rm=(uint8_t)(m&7u);
+        int load=x86_id_is(d.entry->id,"MOVUPS_XMM_RM128");
+        if ((m>>6)==3u) {
+            if (load) {
+                for (uint32_t b=0;b<16u;b++) xmm[reg][b]=xmm[rm][b];
+            } else {
+                for (uint32_t b=0;b<16u;b++) xmm[rm][b]=xmm[reg][b];
+            }
+        } else {
+            uint32_t ea_ip=d.op_pos+2u,ea=0;
+            if (!modrm_ea(m,&ea_ip,&ea)) { cpu_error=0x0F10u|(load?0x10u:0x11u); return -60; }
+            uint32_t access=load?X86_MEM_READ:X86_MEM_WRITE;
+            if (!x86_mem_region_find(ea,16u,access)) {
+                x86_mem_faults++;
+                x86_last_fault_address=ea;
+                x86_last_fault_size=16u;
+                x86_last_fault_kind=access;
+                x86_last_fault_eip=saved_eip;
+                if (x86_first_fault_count==0u) x86_first_fault_eip=saved_eip;
+                x86_first_fault_count++;
+                cpu_error=0xE100u|(load?1u:2u);
+                return -62;
+            }
+            if (load) {
+                for (uint32_t b=0;b<16u;b++) xmm[reg][b]=MEM8(ea+b);
+            } else {
+                for (uint32_t b=0;b<16u;b++) wr8(ea+b,xmm[reg][b]);
+            }
+        }
+        eip=d.cursor;
+        last_dispatch_id=31u;
+        last_dispatch_count++;
+        x86_trace_record(saved_eip,before_flags,before_eax,before_ecx,before_edx,before_ebx,
+                         before_opcode,last_dispatch_id);
+        return 0;
+    }
 
     /* Scalar SSE/SSE2 execution. The decoder has already enforced the
      * F3/F2 prefix constraint, so these semantic IDs are unambiguous. */
