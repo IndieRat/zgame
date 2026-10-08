@@ -174,7 +174,23 @@
     return out;
   }
 
-  const api = { verifyImage, formatTrace, GUEST_PATHS, findGuestEntry, findGuestDlls, findZapiEntries, findZdllEntries, findXapiEntries,
+
+  /* Last n calls into host-implemented imports (oldest first): name, args, return value. */
+  function formatApiLog(ex, n) {
+    if (!ex.x86_get_apilog_count) return [];
+    const hex = (v) => "0x" + (v >>> 0).toString(16);
+    const total = Math.min(ex.x86_get_apilog_count(), 128), out = [];
+    for (let i = Math.min(n, total) - 1; i >= 0; i--) {
+      let name = "";
+      for (let j = 0; j < 80; j++) { const c = ex.x86_get_apilog_name_char(i, j); if (!c) break; name += String.fromCharCode(c); }
+      const target = ex.x86_get_apilog(i, 0);
+      out.push("api[-" + i + "] " + (name || "host#" + hex(target)) + "(" + [4, 5, 6, 7].map((f) => hex(ex.x86_get_apilog(i, f))).join(", ") + ") -> " + hex(ex.x86_get_apilog(i, 2)) +
+        "  from " + hex(ex.x86_get_apilog(i, 1)) + " step " + ex.x86_get_apilog(i, 3));
+    }
+    return out;
+  }
+
+  const api = { formatApiLog, verifyImage, formatTrace, GUEST_PATHS, findGuestEntry, findGuestDlls, findZapiEntries, findZdllEntries, findXapiEntries,
                 runtimeKind, fillMissingImports, readXapiTable };
   if (typeof module === "object" && module && module.exports) module.exports = api;
   else root.ZWASMHost = api;
