@@ -127,7 +127,54 @@
     return table;
   }
 
-  const api = { GUEST_PATHS, findGuestEntry, findGuestDlls, findZapiEntries, findZdllEntries, findXapiEntries,
+
+  /* Last n executed instructions from the runtime's trace ring (oldest first). Works with any
+   * build that exports x86_get_trace_*; ESP/EBP columns need x86_get_trace_post_esp/ebp. */
+  function formatTrace(ex, n) {
+    const hex = (v) => "0x" + (v >>> 0).toString(16);
+    const count = ex.x86_get_trace_count ? ex.x86_get_trace_count() : 0;
+    const out = [];
+    for (let i = Math.max(0, count - n); i < count; i++) {
+      const k = ex.x86_get_trace_index(i);
+      let id = "";
+      if (ex.x86_get_trace_semantic_id_len) {
+        const len = ex.x86_get_trace_semantic_id_len(k);
+        for (let j = 0; j < len; j++) id += String.fromCharCode(ex.x86_get_trace_semantic_id_char(k, j));
+      }
+      out.push("trace[" + (i - count) + "] eip=" + hex(ex.x86_get_trace_eip(k)) + " -> " + hex(ex.x86_get_trace_next_eip(k)) +
+        " op=" + (ex.x86_get_trace_opcode(k) & 255).toString(16).padStart(2, "0") +
+        (ex.x86_get_trace_post_esp ? " esp=" + hex(ex.x86_get_trace_post_esp(k)) + " ebp=" + hex(ex.x86_get_trace_post_ebp(k)) : "") +
+        " eax=" + hex(ex.x86_get_trace_post_eax(k)) + " ecx=" + hex(ex.x86_get_trace_post_ecx(k)) + (id ? " " + id : ""));
+    }
+    return out;
+  }
+
+
+  /* Compare the mapped image in guest memory with the PE file it was loaded from.
+   * Returns human-readable lines: one per section (ok / mismatch with first differing RVA). */
+  function verifyImage(memBuffer, pe, imageBase) {
+    const dv = new DataView(pe.buffer, pe.byteOffset, pe.byteLength);
+    const mem = new Uint8Array(memBuffer);
+    const out = [];
+    const peOff = dv.getUint32(0x3c, true);
+    const nsec = dv.getUint16(peOff + 6, true), optsz = dv.getUint16(peOff + 20, true);
+    const entryRva = dv.getUint32(peOff + 24 + 16, true);
+    let sh = peOff + 24 + optsz;
+    for (let i = 0; i < nsec; i++, sh += 40) {
+      let name = ""; for (let j = 0; j < 8 && pe[sh + j]; j++) name += String.fromCharCode(pe[sh + j]);
+      const va = dv.getUint32(sh + 12, true), raw = dv.getUint32(sh + 20, true), rawsz = dv.getUint32(sh + 16, true);
+      let bad = -1, zeroRun = 0;
+      for (let k = 0; k < rawsz; k++) {
+        if (mem[imageBase + va + k] !== pe[raw + k]) { bad = k; break; }
+      }
+      const hasEntry = entryRva >= va && entryRva < va + rawsz;
+      out.push("section " + name.padEnd(8) + " rva=0x" + va.toString(16) + " raw=" + rawsz + (hasEntry ? " [entry]" : "") +
+        (bad < 0 ? " ok" : " MISMATCH at rva 0x" + (va + bad).toString(16) + " (mem=" + mem[imageBase + va + bad].toString(16) + " file=" + pe[raw + bad].toString(16) + ")"));
+    }
+    return out;
+  }
+
+  const api = { verifyImage, formatTrace, GUEST_PATHS, findGuestEntry, findGuestDlls, findZapiEntries, findZdllEntries, findXapiEntries,
                 runtimeKind, fillMissingImports, readXapiTable };
   if (typeof module === "object" && module && module.exports) module.exports = api;
   else root.ZWASMHost = api;
