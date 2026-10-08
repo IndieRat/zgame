@@ -1069,8 +1069,10 @@ static uint32_t shim_resolve(uint32_t name){
  for(uint32_t i=0;i<SHIM_COUNT;i++)if(streq_ascii(name,shim_tab[i].name))return API_SHIM_BASE+i*4u;
  return 0;
 }
+static uint16_t rd16(uint32_t p);
 static uint32_t x86_dll_get_proc(uint32_t module,uint32_t name);
 static uint32_t x86_dll_module_for_name(uint32_t name);
+static uint32_t x86_dll_module_for_wide_name(uint32_t p);
 static uint32_t x86_dll_load_registered(uint32_t name);
 static void x86_dll_rebind_all(void);
 static uint32_t x86_crt_strlen(uint32_t s);
