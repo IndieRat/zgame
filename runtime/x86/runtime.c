@@ -2831,6 +2831,7 @@ static int load_pe(uint32_t f,uint32_t sz){
  uint32_t sh_source=source+(sh-(uint32_t)f);
  for(uint32_t i=0;i<image_size;i++)wr8(image_base+i,0);
  copy_bytes(image_base,source,szhdr);
+ sh=sh_source; /* the original header may live inside the image range that was just zeroed */
  for(uint16_t i=0;i<nsec;i++,sh+=40u){
   uint32_t va=rd32(sh+12u),vsz=rd32(sh+8u),raw=rd32(sh+20u),rawsz=rd32(sh+16u);
   uint32_t mapped=vsz>rawsz?vsz:rawsz;
