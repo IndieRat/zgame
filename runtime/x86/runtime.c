@@ -3139,8 +3139,6 @@ __attribute__((export_name("x86_get_control_fault_slot"))) uint32_t x86_get_cont
 __attribute__((export_name("x86_get_control_fault_opcode"))) uint32_t x86_get_control_fault_opcode(void){return x86_control_fault_opcode;}
 __attribute__((export_name("x86_get_control_fault_modrm"))) uint32_t x86_get_control_fault_modrm(void){return x86_control_fault_modrm;}
 __attribute__((export_name("x86_get_ebp"))) uint32_t x86_get_ebp(void){return regs[R_EBP];}
-__attribute__((export_name("x86_get_esi"))) uint32_t x86_get_esi(void){return regs[R_ESI];}
-__attribute__((export_name("x86_get_edi"))) uint32_t x86_get_edi(void){return regs[R_EDI];}
 __attribute__((export_name("x86_get_eflags"))) uint32_t x86_get_eflags(void){return eflags;}
 __attribute__((export_name("x86_get_fs_base"))) uint32_t x86_get_fs_base(void){return x86_fs_base;}
 __attribute__((export_name("x86_get_gs_base"))) uint32_t x86_get_gs_base(void){return x86_gs_base;}
