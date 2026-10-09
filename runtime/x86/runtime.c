@@ -1774,11 +1774,41 @@ static int modrm_ea(uint8_t m,uint32_t *ip,uint32_t *ea){
  else if(mod==2){int32_t d=(int32_t)rd32(*ip);*ip+=4;base+=(uint32_t)d;}
  *ea=base+index+x86_segment_base(); return 1;
 }
+/* ModR/M memory operands must stay inside a registered guest region.
+ * Raw WASM bounds alone are insufficient: a guest pointer such as 0x10 can
+ * otherwise read the runtime's linear-memory metadata and later poison ESP. */
+static void x86_note_operand_fault(uint32_t address,uint32_t size,uint32_t kind){
+ x86_mem_faults++;
+ x86_last_fault_address=address;
+ x86_last_fault_size=size;
+ x86_last_fault_kind=kind;
+ x86_last_fault_eip=eip;
+ x86_last_fault_opcode=MEM8(eip);
+ if(x86_first_fault_count==0u){
+  x86_first_fault_eip=eip;
+  x86_first_fault_opcode=MEM8(eip);
+  x86_first_fault_modrm=0u;
+ }
+ x86_first_fault_count++;
+ cpu_error=0xE100u|kind;
+}
 static uint32_t modrm_read32(uint8_t m,uint32_t *ip){
- uint32_t ea=0; if(!modrm_ea(m,ip,&ea))return regs[m&7]; return rd32(ea);
+ uint32_t ea=0;
+ if(!modrm_ea(m,ip,&ea))return regs[m&7];
+ if(!x86_mem_region_find(ea,4u,X86_MEM_READ)){
+  x86_note_operand_fault(ea,4u,1u);
+  return 0u;
+ }
+ return rd32(ea);
 }
 static void modrm_write32(uint8_t m,uint32_t *ip,uint32_t v){
- uint32_t ea=0; if(!modrm_ea(m,ip,&ea)){regs[m&7]=v;return;} wr32(ea,v);
+ uint32_t ea=0;
+ if(!modrm_ea(m,ip,&ea)){regs[m&7]=v;return;}
+ if(!x86_mem_region_find(ea,4u,X86_MEM_WRITE)){
+  x86_note_operand_fault(ea,4u,2u);
+  return;
+ }
+ wr32(ea,v);
 }
 
 /* C0 stack/ABI foundation. IA-32 CALL/RET/PUSH/POP must operate on the
