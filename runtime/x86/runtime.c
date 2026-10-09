@@ -3055,6 +3055,14 @@ __attribute__((export_name("x86_run"))) int x86_run(int32_t max_steps){
    halted=1;
    return r;
   }
+  /* Some checked helpers report a guest-memory fault through cpu_error while
+   * returning a neutral value to their instruction handler. Do not execute
+   * another guest instruction: that would overwrite the first-fault evidence
+   * and can turn a bad load (for example MOV EAX,[0]) into a later ESP fault. */
+  if(cpu_error>=0xE100u){
+   halted=1;
+   return -49;
+  }
   if(eip==X86_ENTRY_RETURN_SENTINEL){halted=1;break;}
  }
  return halted?1:0;
