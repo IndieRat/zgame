@@ -18,6 +18,12 @@ static uint32_t x86_last_fault_kind=0;
 static uint32_t x86_first_fault_eip=0,x86_first_fault_opcode=0,x86_first_fault_modrm=0;
 static uint32_t x86_last_fault_eip=0,x86_last_fault_opcode=0,x86_last_fault_modrm=0;
 static uint32_t x86_first_fault_count=0;
+/* Immutable first-fault snapshot: capture before the CPU loop advances EIP or changes registers. */
+static uint32_t x86_first_fault_regs[8]={0},x86_first_fault_eflags=0;
+static uint32_t x86_first_fault_map=0,x86_first_fault_decoded_opcode=0,x86_first_fault_length=0;
+static uint32_t x86_first_fault_address=0,x86_first_fault_size=0,x86_first_fault_kind=0;
+static uint32_t x86_first_fault_segment_base=0;
+static char x86_first_fault_semantic[X86_SEMANTIC_ID_MAX];
 static uint32_t x86_control_fault_kind=0;
 static uint32_t x86_control_fault_eip=0,x86_control_fault_next_eip=0;
 static uint32_t x86_control_fault_target=0,x86_control_fault_slot=0;
@@ -1788,6 +1794,16 @@ static void x86_note_operand_fault(uint32_t address,uint32_t size,uint32_t kind)
   x86_first_fault_eip=eip;
   x86_first_fault_opcode=MEM8(eip);
   x86_first_fault_modrm=last_decoded_modrm;
+  for(uint32_t r=0;r<8u;r++)x86_first_fault_regs[r]=regs[r];
+  x86_first_fault_eflags=eflags;
+  x86_first_fault_map=last_decoded_map;
+  x86_first_fault_decoded_opcode=last_decoded_opcode;
+  x86_first_fault_length=last_decoded_length;
+  x86_first_fault_address=address;
+  x86_first_fault_size=size;
+  x86_first_fault_kind=kind;
+  x86_first_fault_segment_base=x86_segment_base();
+  x86_copy_semantic_id(x86_first_fault_semantic,last_decoded_semantic_id);
  }
  x86_first_fault_count++;
  cpu_error=0xE100u|kind;
@@ -2998,7 +3014,7 @@ static int load_pe(uint32_t f,uint32_t sz){
  * synthetic return address so C fixtures whose entrypoint is main() can RET cleanly. */
 if(!x86_stack_push32(X86_ENTRY_RETURN_SENTINEL)){loaded=0;load_error=16;return-7;}
 apilog_count=0;{uint32_t iend=image_base+image_size;guest_heap=(iend>GUEST_HEAP_BASE&&iend<GUEST_HEAP_LIMIT)?((iend+0xFFFu)&~0xFFFu):GUEST_HEAP_BASE;}halted=0;cpu_error=0;steps=0;eflags=0x2;decoded_prefixes=0;decoded_operand16=0;last_decoded_map=0;last_decoded_opcode=0;last_decoded_length=0;last_decoded_modrm=0;last_decoded_has_modrm=0;last_dispatch_id=0;last_dispatch_count=0;last_indirect_slot=0;last_indirect_target=0;last_unresolved_gdr=0xFFFFFFFFu;
-x86_first_fault_eip=0;x86_last_fault_eip=0;x86_first_fault_count=0;
+x86_first_fault_eip=0;x86_last_fault_eip=0;x86_first_fault_count=0;x86_first_fault_opcode=0;x86_first_fault_modrm=0;x86_first_fault_map=0;x86_first_fault_decoded_opcode=0;x86_first_fault_length=0;x86_first_fault_address=0;x86_first_fault_size=0;x86_first_fault_kind=0;x86_first_fault_eflags=0;x86_first_fault_segment_base=0;x86_first_fault_semantic[0]=0;for(uint32_t r=0;r<8u;r++)x86_first_fault_regs[r]=0;
 x86_control_fault_kind=0;x86_control_fault_eip=0;x86_control_fault_next_eip=0;x86_control_fault_target=0;x86_control_fault_slot=0;x86_control_fault_opcode=0;x86_control_fault_modrm=0;
 x86_trace_reset();x86_profile_clear();
  x87_init_state(); xmm_reset();
@@ -3131,6 +3147,17 @@ __attribute__((export_name("x86_get_stack_region_top"))) uint32_t x86_get_stack_
 __attribute__((export_name("x86_get_first_fault_eip"))) uint32_t x86_get_first_fault_eip(void){return x86_first_fault_eip;}
 __attribute__((export_name("x86_get_last_fault_eip"))) uint32_t x86_get_last_fault_eip(void){return x86_last_fault_eip;}
 __attribute__((export_name("x86_get_first_fault_count"))) uint32_t x86_get_first_fault_count(void){return x86_first_fault_count;}
+__attribute__((export_name("x86_get_first_fault_reg"))) uint32_t x86_get_first_fault_reg(uint32_t r){return r<8u?x86_first_fault_regs[r]:0xFFFFFFFFu;}
+__attribute__((export_name("x86_get_first_fault_eflags"))) uint32_t x86_get_first_fault_eflags(void){return x86_first_fault_eflags;}
+__attribute__((export_name("x86_get_first_fault_map"))) uint32_t x86_get_first_fault_map(void){return x86_first_fault_map;}
+__attribute__((export_name("x86_get_first_fault_decoded_opcode"))) uint32_t x86_get_first_fault_decoded_opcode(void){return x86_first_fault_decoded_opcode;}
+__attribute__((export_name("x86_get_first_fault_length"))) uint32_t x86_get_first_fault_length(void){return x86_first_fault_length;}
+__attribute__((export_name("x86_get_first_fault_address"))) uint32_t x86_get_first_fault_address(void){return x86_first_fault_address;}
+__attribute__((export_name("x86_get_first_fault_size"))) uint32_t x86_get_first_fault_size(void){return x86_first_fault_size;}
+__attribute__((export_name("x86_get_first_fault_kind"))) uint32_t x86_get_first_fault_kind(void){return x86_first_fault_kind;}
+__attribute__((export_name("x86_get_first_fault_segment_base"))) uint32_t x86_get_first_fault_segment_base(void){return x86_first_fault_segment_base;}
+__attribute__((export_name("x86_get_first_fault_semantic_byte"))) uint32_t x86_get_first_fault_semantic_byte(uint32_t i){return i<X86_SEMANTIC_ID_MAX?(uint8_t)x86_first_fault_semantic[i]:0u;}
+__attribute__((export_name("x86_get_first_fault_byte"))) uint32_t x86_get_first_fault_byte(uint32_t i){uint32_t p=x86_first_fault_eip+i;if(!loaded||i>=32u||p<x86_first_fault_eip||!x86_mem_region_find(p,1u,X86_MEM_READ))return 0xFFFFFFFFu;return (uint32_t)MEM8(p);}
 __attribute__((export_name("x86_get_control_fault_kind"))) uint32_t x86_get_control_fault_kind(void){return x86_control_fault_kind;}
 __attribute__((export_name("x86_get_control_fault_eip"))) uint32_t x86_get_control_fault_eip(void){return x86_control_fault_eip;}
 __attribute__((export_name("x86_get_control_fault_next_eip"))) uint32_t x86_get_control_fault_next_eip(void){return x86_control_fault_next_eip;}
