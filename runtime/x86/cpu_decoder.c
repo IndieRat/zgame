@@ -121,6 +121,7 @@ static void x86_decode_payload_size(x86_decoded_t *d) {
     else if (x86_id_is(id, "MOV_R32_IMM32") && !d->operand16) d->imm_size = 4;
     else if (x86_id_is(id, "XOR_EAX_IMM32")) d->imm_size = 4;
     else if (x86_id_is(id, "MOV_R32_IMM32") && d->operand16) d->imm_size = 2;
+    else if (x86_id_is(id, "MOV_RM32_IMM32") && d->operand16) d->imm_size = 2;
     else if (d->operand16 &&
              (x86_id_is(id, "ADD_EAX_IMM32") ||
               x86_id_is(id, "SUB_EAX_IMM32") ||
@@ -372,6 +373,7 @@ static int x86_decode_instruction(x86_decoded_t *d) {
                         x86_id_is(d->entry->id, "RCR_RM32_CL");
         if (!string16 && !group2_16 &&
             !x86_id_is(d->entry->id, "MOV_R32_IMM32") &&
+            !x86_id_is(d->entry->id, "MOV_RM32_IMM32") &&
             !x86_id_is(d->entry->id, "ADD_EAX_IMM32") &&
             !x86_id_is(d->entry->id, "SUB_EAX_IMM32") &&
             !x86_id_is(d->entry->id, "CMP_EAX_IMM32") &&
