@@ -3045,12 +3045,18 @@ static int cpu_step_legacy(void){
    else{if(!modrm_ea(m,&ip,&ea)){cpu_error=0xC601u;return -48;}wr8(ea,v);}
    eip=ip;return 0;
   }
-  case 0xC7:{ /* MOV r/m32,imm32 */
+  case 0xC7:{ /* MOV r/m32,imm32 or r/m16,imm16 */
    uint8_t m=MEM8(ip++),sub=(m>>3)&7u;
    if(sub!=0u){cpu_error=0xC700u|sub;return -49;}
    uint32_t ea=0,v;
-   if((m>>6)==3){v=rd32(ip);ip+=4;regs[m&7u]=v;}
-   else{if(!modrm_ea(m,&ip,&ea)){cpu_error=0xC701u;return -50;}v=rd32(ip);ip+=4;wr32(ea,v);}
+   if((m>>6)==3){
+    if(decoded_operand16){uint16_t v16=rd16(ip);ip+=2;reg16_write(m&7u,v16);}
+    else{v=rd32(ip);ip+=4;regs[m&7u]=v;}
+   }else{
+    if(!modrm_ea(m,&ip,&ea)){cpu_error=0xC701u;return -50;}
+    if(decoded_operand16){uint16_t v16=rd16(ip);ip+=2;wr16(ea,v16);}
+    else{v=rd32(ip);ip+=4;wr32(ea,v);}
+   }
    eip=ip;return 0;
   }
   case 0xC9:{uint32_t v;regs[R_ESP]=regs[R_EBP];if(!x86_stack_pop32(&v))return -44;regs[R_EBP]=v;eip=ip;return 0;} /* LEAVE */
