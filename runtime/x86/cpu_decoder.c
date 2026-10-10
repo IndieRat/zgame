@@ -105,10 +105,14 @@ static int x86_decode_modrm_tail(x86_decoded_t *d) {
 
 static int x86_id_is(const char *a,const char *b){while(*a&&*b){if(*a++!=*b++)return 0;}return *a==0&&*b==0;}
 
+static int x86_id_has_prefix(const char *a,const char *p){while(*p){if(*a++!=*p++)return 0;}return 1;}
+static int x86_id_has_suffix(const char *a,const char *s){const char*e=a;while(*e)e++;const char*f=s;while(*f)f++;if((f-s)>(e-a))return 0;while(f>s){if(*--e!=*--f)return 0;}return 1;}
+
 static void x86_decode_payload_size(x86_decoded_t *d) {
     const char *id = d->entry ? d->entry->id : 0;
     if (!id) return;
     if (x86_id_is(id, "RET_IMM16")) d->imm_size = 2;
+    if (x86_id_has_prefix(id, "SSE_") && x86_id_has_suffix(id, "_IMM8")) d->imm_size = 1;
     if (x86_id_is(id, "MOV_R8_IMM8") || x86_id_is(id, "MOV_RM8_IMM8")) d->imm_size = 1;
     if (x86_id_is(id, "MOV_AL_MOFFS8") || x86_id_is(id, "MOV_EAX_MOFFS32") || x86_id_is(id, "MOV_MOFFS8_AL") || x86_id_is(id, "MOV_MOFFS32_EAX")) d->imm_size = 4;
     if (x86_id_is(id, "OR_EAX_IMM32") || x86_id_is(id, "SBB_EAX_IMM32") || x86_id_is(id, "TEST_EAX_IMM32")) d->imm_size = 4;
@@ -130,6 +134,9 @@ static void x86_decode_payload_size(x86_decoded_t *d) {
         x86_id_is(id, "ADD_RM32_IMM32") ||
         x86_id_is(id, "SUB_RM32_IMM32") ||
         x86_id_is(id, "CMP_RM32_IMM32") ||
+        x86_id_is(id, "OR_RM32_IMM32") ||
+        x86_id_is(id, "AND_RM32_IMM32") ||
+        x86_id_is(id, "ADC_EAX_IMM32") ||
         x86_id_is(id, "XOR_RM32_IMM32") ||
         x86_id_is(id, "ADC_RM32_IMM32") ||
         x86_id_is(id, "SBB_RM32_IMM32") ||
@@ -157,6 +164,7 @@ static void x86_decode_payload_size(x86_decoded_t *d) {
              x86_id_is(id, "RCL_RM32_IMM8") ||
              x86_id_is(id, "RCR_RM32_IMM8") ||
              x86_id_is(id, "IMUL_R32_RM32_IMM8") ||
+             x86_id_is(id, "OR_RM8_IMM8") ||
              x86_id_is(id, "TEST_RM8_IMM8") ||
              x86_id_is(id, "SHLD_RM32_R32_IMM8") ||
              x86_id_is(id, "SHRD_RM32_R32_IMM8") ||
@@ -370,6 +378,7 @@ static int x86_decode_instruction(x86_decoded_t *d) {
             !x86_id_is(d->entry->id, "MOV_RM16_SREG") &&
             !x86_id_is(d->entry->id, "MOV_SREG_RM16") &&
             !x86_id_is(d->entry->id, "MOVZX_R32_RM16") &&
+            !x86_id_has_prefix(d->entry->id, "SSE_") &&
             !x86_id_is(d->entry->id, "MOV_RM32_R32") &&
             !x86_id_is(d->entry->id, "MOV_R32_RM32") &&
             !x86_id_is(d->entry->id, "NOP_RM32") &&
@@ -497,7 +506,7 @@ static int cpu_step(void) {
                 for (uint32_t b=0;b<16u;b++) xmm[rm][b]=xmm[reg][b];
             }
         } else {
-            uint32_t ea_ip=d.op_pos+2u,ea=0;
+            uint32_t ea_ip=d.op_pos+3u,ea=0; /* 0F xx: ModR/M is at op_pos+2, operand bytes start after it */
             if (!modrm_ea(m,&ea_ip,&ea)) { cpu_error=0x0F10u|(load?0x10u:0x11u); return -60; }
             uint32_t access=load?X86_MEM_READ:X86_MEM_WRITE;
             if (!x86_mem_region_find(ea,16u,access)) {
@@ -781,7 +790,7 @@ static int cpu_step(void) {
             x86_id_is(d.entry->id,"MOV_EAX_MOFFS32") ||
             x86_id_is(d.entry->id,"MOV_MOFFS8_AL") ||
             x86_id_is(d.entry->id,"MOV_MOFFS32_EAX")) {
-            uint32_t address=rd32(d.cursor-4u);
+            uint32_t address=rd32(d.cursor-4u)+x86_segment_base(); /* honour fs:/gs: overrides */
             if (x86_id_is(d.entry->id,"MOV_AL_MOFFS8")) {
                 reg8_write(0, MEM8(address));
             } else if (x86_id_is(d.entry->id,"MOV_EAX_MOFFS32")) {
