@@ -30,6 +30,11 @@ static uint32_t x86_control_fault_target=0,x86_control_fault_slot=0;
 static uint32_t x86_control_fault_opcode=0,x86_control_fault_modrm=0;
 static uint32_t x86_last_stack_fault_esp=0,x86_last_stack_fault_eip=0,x86_last_stack_fault_kind=0;
 static uint8_t x86_memory_fault_byte=0;
+/* The freestanding build links without libc, but clang can turn a plain string loop into a call to strlen.
+ * Defining it here keeps that from becoming an unresolved host import; optnone stops the loop below from
+ * being recognised as strlen again. */
+__attribute__((used,noinline,optnone)) unsigned long strlen(const char*s){unsigned long n=0;while(s[n])n++;return n;}
+
 static uint8_t *x86_wasm_byte_ptr(uint32_t p,uint32_t size,uint32_t kind){
  uint32_t pages=__builtin_wasm_memory_size(0u);
  uint32_t have=pages*65536u;
@@ -93,7 +98,7 @@ static uint32_t crt_atexit_callbacks[X86_CRT_ATEXIT_MAX];
 uint32_t x86_crt_startup(void);
 uint32_t x86_crt_exit(uint32_t code);
 static uint32_t requested_image_base=0,reloc_rva=0,reloc_size=0,import_rva=0,import_size=0;
-static uint32_t relocation_needed=0,dll_count=0,import_count=0,load_error=0,last_load_ptr=0,last_load_size=0;
+static uint32_t tls_dir_rva=0,tls_callbacks_va=0,relocation_needed=0,dll_count=0,import_count=0,load_error=0,last_load_ptr=0,last_load_size=0;
 static uint32_t regs[8],eflags=0x00000002u;
 #define X86_FLOW_DEPTH 32u
 static uint32_t x86_flow_head=0,x86_flow_count=0;
@@ -3375,6 +3380,27 @@ static uint32_t x86_dll_load_registered(uint32_t name){
 static uint32_t x86_dll_module_for_name(uint32_t name){uint32_t p=x86_dll_basename_ptr(name);int i=x86_dll_find_loaded(p);if(i>=0)return x86_dll_modules[i].base;return x86_dll_ascii_module_name(p)?image_base:0;}
 static void x86_dll_rebind_all(void){if(loaded)scan_imports();}
 
+/* Implicit TLS (__declspec(thread) / the CRT's own per-thread state): the PE TLS directory describes a template
+ * that every thread gets a private copy of. This runtime has one guest thread, so build that copy once and
+ * publish it the way Windows does: TEB.ThreadLocalStoragePointer (fs:[0x2C]) -> array of block pointers, with
+ * the module's _tls_index slot set to 0. */
+static void x86_setup_tls(void){
+ tls_callbacks_va=0;
+ if(!tls_dir_rva)return;
+ uint32_t d=image_base+tls_dir_rva;
+ uint32_t start=rd32(d),end=rd32(d+4u),idx_addr=rd32(d+8u),cbs=rd32(d+12u),zero=rd32(d+16u);
+ uint32_t tsz=(end>=start)?(end-start):0u,total=tsz+zero;
+ if(total>0x1000000u)return;
+ uint32_t blk=x86_mem_alloc_region(((total?total:1u)+0xFFFu)&~0xFFFu,X86_MEM_READ|X86_MEM_WRITE,10u);
+ uint32_t arr=x86_mem_alloc_region(0x1000u,X86_MEM_READ|X86_MEM_WRITE,10u);
+ if(!blk||!arr)return;
+ for(uint32_t i=0;i<total;i++)wr8(blk+i,0);
+ for(uint32_t i=0;i<tsz;i++)wr8(blk+i,MEM8(start+i));
+ wr32(arr,blk);
+ wr32(X86_FS_TEB_BASE+0x2Cu,arr);
+ if(idx_addr)wr32(idx_addr,0u);
+ tls_callbacks_va=cbs;
+}
 static int load_pe(uint32_t f,uint32_t sz){
  load_error=0;loaded=0;last_load_ptr=f;last_load_size=sz;
  crt_exited=0;crt_exit_code=0;crt_last_termination_kind=0u;crt_last_termination_caller=0u;
@@ -3394,6 +3420,7 @@ static int load_pe(uint32_t f,uint32_t sz){
  requested_image_base=reqbase; image_base=IMAGE_BASE; image_size=szimg; entry=ep;
  relocation_needed=(requested_image_base!=image_base)?1u:0u;
  if(dirs>1u){import_rva=rd32(oh+96u+8u);import_size=rd32(oh+96u+12u);}
+ tls_dir_rva=0;if(dirs>9u)tls_dir_rva=rd32(oh+96u+72u); /* captured now: the source header may be overwritten once the image is mapped */
  if(dirs>5u){reloc_rva=rd32(oh+96u+40u);reloc_size=rd32(oh+96u+44u);}
  uint32_t sh=oh+optsz;
  if(sh<f||sh>f+sz||(uint64_t)nsec*40u>(uint64_t)(f+sz-sh)){load_error=12;return-5;}
@@ -3435,6 +3462,7 @@ static int load_pe(uint32_t f,uint32_t sz){
  wr32(X86_FS_TEB_BASE+0x18u,X86_FS_TEB_BASE);
  wr32(X86_FS_TEB_BASE+0x30u,X86_FS_TEB_BASE+0x100u);
  wr32(X86_GS_TEB_BASE+0x18u,X86_GS_TEB_BASE);
+ x86_setup_tls();
  /* Ensure the guest stack has real WASM backing before the first PUSH. */
  if(!x86_mem_ensure_wasm(X86_STACK_TOP)){load_error=16;return-7;}
  if(!x86_mem_region_add(X86_STACK_BASE,X86_STACK_SIZE,X86_MEM_READ|X86_MEM_WRITE,6u)){load_error=16;return-7;}
