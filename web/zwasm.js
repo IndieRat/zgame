@@ -543,6 +543,12 @@ class GuestRuntime {
     if (ex.x86_get_last_stack_fault_esp) log("diag: stack fault kind="+ex.x86_get_last_stack_fault_kind()+" esp="+hex(ex.x86_get_last_stack_fault_esp())+" eip="+hex(ex.x86_get_last_stack_fault_eip()));
     if (ex.x86_get_flow_count) { const n=Math.min(ex.x86_get_flow_count(),16); for(let i=0;i<n;i++) log("diag: flow[-"+i+"] eip="+hex(ex.x86_get_flow_eip(i))+" op="+hex(ex.x86_get_flow_opcode(i))+" esp="+hex(ex.x86_get_flow_esp(i))+" ebp="+hex(ex.x86_get_flow_ebp(i))); }
     log("diag: memory faults=" + ex.x86_get_memory_faults() + " first fault eip=" + hex(ex.x86_get_first_fault_eip()) + " last fault eip=" + hex(ex.x86_get_last_fault_eip()) + " last fault addr=" + hex(ex.x86_get_last_memory_fault_address()) + " size=" + ex.x86_get_last_memory_fault_size() + " kind=" + ex.x86_get_last_memory_fault_kind());
+    if (ex.x86_get_first_fault_reg) {
+      const regNames = ["EAX","ECX","EDX","EBX","ESP","EBP","ESI","EDI"];
+      log("diag: FIRST-FAULT snapshot eip=" + hex(ex.x86_get_first_fault_eip()) + " bytes=" + Array.from({length:12},(_,i)=>{const b=ex.x86_get_first_fault_byte(i);return b<0||b===0xFFFFFFFF?"??":(b&255).toString(16).padStart(2,"0")}).join(" ") + " map=" + hex(ex.x86_get_first_fault_map()) + " opcode=" + hex(ex.x86_get_first_fault_decoded_opcode()) + " modrm=" + hex(ex.x86_get_first_fault_modrm?.() ?? 0) + " length=" + ex.x86_get_first_fault_length() + " semantic=" + Array.from({length:64},(_,i)=>ex.x86_get_first_fault_semantic_byte(i)).map(c=>c?String.fromCharCode(c):"").join("").split("\\0")[0]);
+      log("diag: FIRST-FAULT operand address=" + hex(ex.x86_get_first_fault_address()) + " size=" + ex.x86_get_first_fault_size() + " kind=" + ex.x86_get_first_fault_kind() + " segmentBase=" + hex(ex.x86_get_first_fault_segment_base()) + " EFLAGS=" + hex(ex.x86_get_first_fault_eflags()));
+      log("diag: FIRST-FAULT GPR " + regNames.map((n,i)=>n+"="+hex(ex.x86_get_first_fault_reg(i))).join(" "));
+    }
     for (const line of ZWASMHost.formatTrace(ex, 16)) log("diag: " + line);
     for (const line of ZWASMHost.formatApiLog(ex, 40)) log("diag: " + line);
     if (ex.x86_get_shadow_stat) {
