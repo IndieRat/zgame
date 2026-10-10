@@ -537,6 +537,19 @@ class GuestRuntime {
     this.diagShown = true;
     const ex = this.instance.exports, hex = (v) => "0x" + (v >>> 0).toString(16);
     log("diag: " + reason + " eip=" + hex(ex.x86_get_eip()) + " steps=" + ex.x86_get_steps() + " cpu_error=" + hex(ex.x86_get_cpu_error()) + " halted=" + ex.x86_get_halted());
+    if (ex.x86_get_control_fault_target && ex.x86_get_control_fault_slot) {
+      const cfKind = ex.x86_get_control_fault_kind?.() ?? 0;
+      const cfEip = ex.x86_get_control_fault_eip?.() ?? 0;
+      const cfNext = ex.x86_get_control_fault_next_eip?.() ?? 0;
+      const cfTarget = ex.x86_get_control_fault_target();
+      const cfSlot = ex.x86_get_control_fault_slot();
+      const unresolved = ex.x86_get_last_unresolved_gdr?.() ?? 0xffffffff;
+      log("diag: control-transfer fault kind=" + cfKind + " eip=" + hex(cfEip) + " next=" + hex(cfNext) + " target=" + hex(cfTarget) + " slot=" + hex(cfSlot) + " last unresolved GDR=" + hex(unresolved));
+      if (ex.x86_get_gdr_count && ex.x86_get_gdr_dll_name_byte && ex.x86_get_gdr_func_name_byte && unresolved < ex.x86_get_gdr_count()) {
+        const readGdrName = (fn, i) => { let s = ""; for (let j = 0; j < 255; j++) { const ch = ex[fn](i, j); if (!ch) break; s += String.fromCharCode(ch); } return s; };
+        log("diag: control-transfer unresolved import " + readGdrName("x86_get_gdr_dll_name_byte", unresolved) + "!" + readGdrName("x86_get_gdr_func_name_byte", unresolved) + " IAT RVA=" + hex(ex.x86_get_gdr_iat_rva?.(unresolved) ?? 0) + " target=" + hex(ex.x86_get_gdr_target?.(unresolved) ?? 0));
+      }
+    }
     let bytes = ""; for (let i = 0; i < 12; i++) bytes += (ex.x86_get_current_byte(i) & 255).toString(16).padStart(2, "0") + " ";
     log("diag: bytes at eip: " + bytes + "| last x87 op=" + hex(ex.x86_get_x87_last_opcode()) + " modrm=" + hex(ex.x86_get_x87_last_modrm()) + " at " + hex(ex.x86_get_x87_last_eip()));
     if (ex.x86_get_esp) log("diag: GPR EAX="+hex(ex.x86_get_eax?.() ?? 0)+" ECX="+hex(ex.x86_get_ecx?.() ?? 0)+" EDX="+hex(ex.x86_get_edx?.() ?? 0)+" EBX="+hex(ex.x86_get_ebx?.() ?? 0)+" ESP="+hex(ex.x86_get_esp())+" EBP="+hex(ex.x86_get_ebp?.() ?? 0)+" ESI="+hex(ex.x86_get_esi?.() ?? 0)+" EDI="+hex(ex.x86_get_edi?.() ?? 0)+" stack=["+hex(ex.x86_get_stack_region_base?.() ?? 0)+".."+hex(ex.x86_get_stack_region_top?.() ?? 0)+"]");
