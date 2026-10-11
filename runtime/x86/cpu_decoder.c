@@ -108,7 +108,8 @@ static int x86_id_is(const char *a,const char *b){while(*a&&*b){if(*a++!=*b++)re
 static int x86_id_has_prefix(const char *a,const char *p){while(*p){if(*a++!=*p++)return 0;}return 1;}
 static int x86_id_has_suffix(const char *a,const char *s){const char*e=a;while(*e)e++;const char*f=s;while(*f)f++;if((f-s)>(e-a))return 0;while(f>s){if(*--e!=*--f)return 0;}return 1;}
 
-static void x86_decode_payload_size(x86_decoded_t *d) {
+static int x86_op16_opcode_ok(uint8_t op);
+static void x86_decode_payload_size_base(x86_decoded_t *d) {
     const char *id = d->entry ? d->entry->id : 0;
     if (!id) return;
     if (x86_id_is(id, "RET_IMM16")) d->imm_size = 2;
@@ -228,6 +229,16 @@ static void x86_decode_payload_size(x86_decoded_t *d) {
              x86_id_is(id, "LOOP_REL8") ||
              x86_id_is(id, "LOOPE_REL8") ||
              x86_id_is(id, "LOOPNE_REL8")) d->rel_size = 1;
+}
+
+/* Under a 0x66 prefix every IMM32 operand shrinks to 16 bits (moffs addresses stay 32-bit). */
+static void x86_decode_payload_size(x86_decoded_t *d) {
+    x86_decode_payload_size_base(d);
+    const char *id = d->entry ? d->entry->id : 0;
+    if (id && d->operand16 && d->imm_size == 4 &&
+        !x86_id_is(id, "MOV_EAX_MOFFS32") && !x86_id_is(id, "MOV_MOFFS32_EAX") &&
+        !x86_id_is(id, "MOV_AL_MOFFS8") && !x86_id_is(id, "MOV_MOFFS8_AL"))
+        d->imm_size = 2;
 }
 static int x86_decode_instruction(x86_decoded_t *d) {
     d->start = eip;
@@ -381,6 +392,7 @@ static int x86_decode_instruction(x86_decoded_t *d) {
             !x86_id_is(d->entry->id, "MOV_SREG_RM16") &&
             !x86_id_is(d->entry->id, "MOVZX_R32_RM16") &&
             !x86_id_has_prefix(d->entry->id, "SSE_") &&
+            !(d->map == 0 && x86_op16_opcode_ok(d->opcode)) &&
             !x86_id_is(d->entry->id, "MOV_RM32_R32") &&
             !x86_id_is(d->entry->id, "MOV_R32_RM32") &&
             !x86_id_is(d->entry->id, "NOP_RM32") &&
@@ -447,6 +459,95 @@ static const char *x87_semantic_name(uint8_t op, uint8_t m, char *buf) {
     return buf;
 }
 
+/* ---- 16-bit operand-size (0x66) integer instructions ---------------------------------------------
+ * Handles the one-byte-opcode forms the compiler emits for `short` arithmetic. Flags use the
+ * width-aware helpers so CF/OF/ZF/SF/PF/AF match hardware for 16-bit results. Returns 1 when the
+ * instruction was executed, 0 when this opcode/ModRM form has no 16-bit implementation. */
+static uint32_t x86_alu16(int sub,uint32_t a,uint32_t b,int *write){
+ uint32_t cin=(eflags&CF)?1u:0u,r=0;*write=1;a&=0xFFFFu;b&=0xFFFFu;
+ switch(sub){
+  case 0:r=(a+b)&0xFFFFu;set_add_flags_width(a,b,r,16u);break;
+  case 1:r=a|b;set_logic_flags_width(r,16u);break;
+  case 2:r=(a+b+cin)&0xFFFFu;set_adc_flags_width(a,b,cin,r,16u);break;
+  case 3:r=(a-b-cin)&0xFFFFu;set_sbb_flags_width(a,b,cin,r,16u);break;
+  case 4:r=a&b;set_logic_flags_width(r,16u);break;
+  case 5:r=(a-b)&0xFFFFu;set_sub_flags_width(a,b,r,16u);break;
+  case 6:r=a^b;set_logic_flags_width(r,16u);break;
+  default:r=(a-b)&0xFFFFu;set_sub_flags_width(a,b,r,16u);*write=0;break;
+ }
+ return r;
+}
+static int x86_op16_opcode_ok(uint8_t op){
+ if(op<0x40u){uint8_t k=op&7u;return k==1u||k==3u||k==5u;}
+ if(op>=0x40u&&op<=0x5Fu)return 1;
+ switch(op){case 0x69:case 0x6B:case 0x81:case 0x83:case 0x85:case 0x87:case 0x98:case 0x99:case 0xA1:case 0xA3:case 0xA9:case 0xC7:case 0xF7:case 0xFF:return 1;}
+ return op>=0x90u&&op<=0x97u;
+}
+static int x86_exec16(uint8_t op,uint32_t op_pos,uint32_t cursor,uint32_t imm_size,uint32_t *next){
+ uint32_t ip=op_pos+1u,ea=0;uint8_t m=0;int w=1;
+ #define RM16_READ(out) do{ if((m>>6)==3)(out)=reg16_read(m&7u); else {if(!modrm_ea(m,&ip,&ea))return -1;(out)=rd16(ea);} }while(0)
+ #define RM16_PEEK() do{ if((m>>6)!=3&&!modrm_ea(m,&ip,&ea))return -1; }while(0)
+ #define RM16_STORE(v) do{ if((m>>6)==3)reg16_write(m&7u,(uint16_t)(v)); else {wr8(ea,(uint8_t)(v));wr8(ea+1u,(uint8_t)((v)>>8));} }while(0)
+ uint32_t imm=imm_size==2u?(uint32_t)rd16(cursor-2u):(imm_size==1u?(uint32_t)(uint16_t)(int16_t)(int8_t)MEM8(cursor-1u):0u);
+ if(op<0x40u){
+  uint8_t k=op&7u;int sub=op>>3;
+  if(k==5u){uint32_t r=x86_alu16(sub,reg16_read(0),imm,&w);if(w)reg16_write(0,(uint16_t)r);*next=cursor;return 1;}
+  if(k!=1u&&k!=3u)return 0;
+  m=MEM8(ip++);uint8_t reg=(m>>3)&7u;
+  if(k==1u){ /* rm16, r16 */
+   RM16_PEEK();uint32_t a=((m>>6)==3)?reg16_read(m&7u):rd16(ea);
+   uint32_t r=x86_alu16(sub,a,reg16_read(reg),&w);if(w)RM16_STORE(r);
+  }else{ /* r16, rm16 */
+   uint32_t b;RM16_READ(b);uint32_t r=x86_alu16(sub,reg16_read(reg),b,&w);if(w)reg16_write(reg,(uint16_t)r);
+  }
+  *next=cursor;return 1;
+ }
+ if(op<=0x4Fu){ /* INC/DEC r16: CF preserved */
+  uint32_t r=op&7u,a=reg16_read(r),cf=eflags&CF,v;
+  if(op<0x48u){v=(a+1u)&0xFFFFu;set_add_flags_width(a,1u,v,16u);}else{v=(a-1u)&0xFFFFu;set_sub_flags_width(a,1u,v,16u);}
+  eflags=(eflags&~CF)|cf;reg16_write(r,(uint16_t)v);*next=cursor;return 1;
+ }
+ if(op<=0x57u){uint32_t sp=regs[R_ESP]-2u;uint32_t v=reg16_read(op&7u);regs[R_ESP]=sp;wr8(sp,(uint8_t)v);wr8(sp+1u,(uint8_t)(v>>8));*next=cursor;return 1;} /* PUSH r16 */
+ if(op<=0x5Fu){uint32_t sp=regs[R_ESP];uint32_t v=rd16(sp);regs[R_ESP]=sp+2u;reg16_write(op&7u,(uint16_t)v);*next=cursor;return 1;}       /* POP r16 */
+ switch(op){
+  case 0x81:case 0x83:{
+   m=MEM8(ip++);int sub=(m>>3)&7;RM16_PEEK();uint32_t a=((m>>6)==3)?reg16_read(m&7u):rd16(ea);
+   uint32_t r=x86_alu16(sub,a,imm,&w);if(w)RM16_STORE(r);*next=cursor;return 1;
+  }
+  case 0x85:{m=MEM8(ip++);uint32_t a;RM16_READ(a);set_logic_flags_width(a&reg16_read((m>>3)&7u),16u);*next=cursor;return 1;}
+  case 0xA9:set_logic_flags_width(reg16_read(0)&imm,16u);*next=cursor;return 1;
+  case 0x87:{m=MEM8(ip++);uint8_t reg=(m>>3)&7u;RM16_PEEK();uint32_t a=((m>>6)==3)?reg16_read(m&7u):rd16(ea),b=reg16_read(reg);RM16_STORE(b);reg16_write(reg,(uint16_t)a);*next=cursor;return 1;}
+  case 0xC7:{m=MEM8(ip++);if(((m>>3)&7u)!=0u)return 0;RM16_PEEK();RM16_STORE(imm);*next=cursor;return 1;}
+  case 0xF7:{
+   m=MEM8(ip++);uint8_t sub=(m>>3)&7u;
+   if(sub==0u||sub==1u){uint32_t a;RM16_READ(a);set_logic_flags_width(a&imm,16u);*next=cursor;return 1;}
+   if(sub==2u||sub==3u){RM16_PEEK();uint32_t a=((m>>6)==3)?reg16_read(m&7u):rd16(ea),r;
+    if(sub==2u)r=(~a)&0xFFFFu;else{r=(0u-a)&0xFFFFu;set_sub_flags_width(0u,a,r,16u);eflags=(eflags&~CF)|(a?CF:0u);}
+    RM16_STORE(r);*next=cursor;return 1;}
+   return 0;
+  }
+  case 0xFF:{
+   m=MEM8(ip++);uint8_t sub=(m>>3)&7u;if(sub>1u)return 0;
+   RM16_PEEK();uint32_t a=((m>>6)==3)?reg16_read(m&7u):rd16(ea),cf=eflags&CF,v;
+   if(sub==0u){v=(a+1u)&0xFFFFu;set_add_flags_width(a,1u,v,16u);}else{v=(a-1u)&0xFFFFu;set_sub_flags_width(a,1u,v,16u);}
+   eflags=(eflags&~CF)|cf;RM16_STORE(v);*next=cursor;return 1;
+  }
+  case 0x98:reg16_write(0,(uint16_t)(int16_t)(int8_t)reg8_read(0));*next=cursor;return 1;                                  /* CBW */
+  case 0x99:reg16_write(2,(reg16_read(0)&0x8000u)?0xFFFFu:0u);*next=cursor;return 1;                                      /* CWD */
+  case 0xA1:{uint32_t addr=rd32(cursor-4u)+x86_segment_base();reg16_write(0,rd16(addr));*next=cursor;return 1;}              /* MOV AX,[moffs] */
+  case 0xA3:{uint32_t addr=rd32(cursor-4u)+x86_segment_base();uint32_t v=reg16_read(0);wr8(addr,(uint8_t)v);wr8(addr+1u,(uint8_t)(v>>8));*next=cursor;return 1;}
+  case 0x69:case 0x6B:{ /* IMUL r16, rm16, imm */
+   m=MEM8(ip++);uint32_t b;RM16_READ(b);int32_t p=(int32_t)(int16_t)b*(int32_t)(int16_t)imm;
+   reg16_write((m>>3)&7u,(uint16_t)p);eflags&=~(CF|OF);if(p!=(int32_t)(int16_t)p)eflags|=CF|OF;*next=cursor;return 1;
+  }
+ }
+ if(op>=0x90u&&op<=0x97u){uint32_t r=op&7u;if(r){uint32_t a=reg16_read(0),b=reg16_read(r);reg16_write(0,(uint16_t)b);reg16_write(r,(uint16_t)a);}*next=cursor;return 1;}
+ return 0;
+ #undef RM16_READ
+ #undef RM16_PEEK
+ #undef RM16_STORE
+}
+
 static int cpu_step(void) {
     x86_decoded_t d;
     uint32_t saved_eip = eip;
@@ -493,6 +594,27 @@ static int cpu_step(void) {
     last_decoded_modrm = d.has_modrm ? d.modrm : 0u;
     x86_copy_semantic_id(last_decoded_semantic_id,
                          (d.entry && d.entry->id) ? d.entry->id : "NONE");
+
+    /* 0x66-prefixed integer instructions run in x86_exec16 before any 32-bit semantic handler can see them. */
+    if (d.operand16 && d.map == 0 && x86_op16_opcode_ok(d.opcode)) {
+        uint32_t next16 = 0;
+        int r16 = x86_exec16(d.opcode, d.op_pos ? d.op_pos : saved_eip, d.cursor, d.imm_size, &next16);
+        if (r16 > 0) {
+            eip = next16;
+            last_dispatch_id = X86_DISPATCH_NONE;
+            last_dispatch_count++;
+            x86_trace_record(saved_eip,before_flags,before_eax,before_ecx,before_edx,before_ebx,
+                             before_opcode,last_dispatch_id);
+            return 0;
+        }
+        eip = saved_eip;
+        cpu_error = 0xD300u | d.opcode;  /* 16-bit form with no implementation */
+        x86_copy_semantic_id(last_decoded_semantic_id, "DECODE_FAULT");
+        trace_failure_index = trace_head % X86_TRACE_DEPTH;
+        x86_trace_record(saved_eip,before_flags,before_eax,before_ecx,before_edx,before_ebx,
+                         before_opcode,X86_DISPATCH_NONE);
+        return -3;
+    }
 
     /* 128-bit MOVUPS load/store. This dispatch is deliberately in the decoded
      * CPU path: the legacy switch cannot handle 0F-prefixed instructions once the
