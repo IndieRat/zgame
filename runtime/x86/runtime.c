@@ -1716,8 +1716,8 @@ static void set_logic_flags(uint32_t v){
 static uint32_t parity_even8(uint32_t v){v&=0xFFu;v^=v>>4;v^=v>>2;v^=v>>1;return (v&1u)==0u;}
 static void set_logic_flags_width(uint32_t v,uint32_t bits){uint32_t mask=bits==8?0xFFu:(bits==16?0xFFFFu:0xFFFFFFFFu),sign=1u<<(bits-1u);v&=mask;uint32_t f=eflags&~(CF|PF|AF|ZF|SF|OF);if(parity_even8(v))f|=PF;if(v==0)f|=ZF;if(v&sign)f|=SF;eflags=f;}
 static void set_add_flags_width(uint32_t a,uint32_t b,uint32_t r,uint32_t bits){uint32_t mask=bits==8?0xFFu:(bits==16?0xFFFFu:0xFFFFFFFFu),sign=1u<<(bits-1u);a&=mask;b&=mask;r&=mask;uint32_t f=eflags&~(CF|PF|AF|ZF|SF|OF);if((uint64_t)a+(uint64_t)b>mask)f|=CF;if(((a&0xFu)+(b&0xFu))>0xFu)f|=AF;if(parity_even8(r))f|=PF;if(!r)f|=ZF;if(r&sign)f|=SF;if(((~(a^b))&(a^r)&sign)!=0)f|=OF;eflags=f;}
-static void set_adc_flags_width(uint32_t a,uint32_t b,uint32_t cin,uint32_t r,uint32_t bits){uint32_t mask=bits==8?0xFFu:(bits==16?0xFFFFu:0xFFFFFFFFu),sign=1u<<(bits-1u);a&=mask;b&=mask;r&=mask;uint32_t f=eflags&~(CF|PF|AF|ZF|SF|OF);if((uint64_t)a+(uint64_t)b+cin>mask)f|=CF;if(((a&0xFu)+(b&0xFu)+cin)>0xFu)f|=AF;if(parity_even8(r))f|=PF;if(!r)f|=ZF;if(r&sign)f|=SF;uint32_t bb=(b+cin)&mask;if(((~(a^bb))&(a^r)&sign)!=0)f|=OF;eflags=f;}
-static void set_sbb_flags_width(uint32_t a,uint32_t b,uint32_t bin,uint32_t r,uint32_t bits){uint32_t mask=bits==8?0xFFu:(bits==16?0xFFFFu:0xFFFFFFFFu),sign=1u<<(bits-1u);a&=mask;b&=mask;r&=mask;uint32_t f=eflags&~(CF|PF|AF|ZF|SF|OF);uint32_t bb=b+bin;if((uint64_t)a<(uint64_t)bb)f|=CF;if((a&0xFu)<((b&0xFu)+bin))f|=AF;if(parity_even8(r))f|=PF;if(!r)f|=ZF;if(r&sign)f|=SF;bb&=mask;if(((a^bb)&(a^r)&sign)!=0)f|=OF;eflags=f;}
+static void set_adc_flags_width(uint32_t a,uint32_t b,uint32_t cin,uint32_t r,uint32_t bits){uint32_t mask=bits==8?0xFFu:(bits==16?0xFFFFu:0xFFFFFFFFu),sign=1u<<(bits-1u);a&=mask;b&=mask;r&=mask;uint32_t f=eflags&~(CF|PF|AF|ZF|SF|OF);if((uint64_t)a+(uint64_t)b+cin>mask)f|=CF;if(((a&0xFu)+(b&0xFu)+cin)>0xFu)f|=AF;if(parity_even8(r))f|=PF;if(!r)f|=ZF;if(r&sign)f|=SF;if(((a^r)&(b^r)&sign)!=0)f|=OF;eflags=f;} /* OF uses the original b: b+cin can wrap to 0 */
+static void set_sbb_flags_width(uint32_t a,uint32_t b,uint32_t bin,uint32_t r,uint32_t bits){uint32_t mask=bits==8?0xFFu:(bits==16?0xFFFFu:0xFFFFFFFFu),sign=1u<<(bits-1u);a&=mask;b&=mask;r&=mask;uint32_t f=eflags&~(CF|PF|AF|ZF|SF|OF);uint32_t bb=b+bin;if((uint64_t)a<(uint64_t)bb)f|=CF;if((a&0xFu)<((b&0xFu)+bin))f|=AF;if(parity_even8(r))f|=PF;if(!r)f|=ZF;if(r&sign)f|=SF;if(((a^b)&(a^r)&sign)!=0)f|=OF;eflags=f;} /* OF uses the original b */
 static void set_add_flags(uint32_t a,uint32_t b,uint32_t r){
  uint32_t f=eflags&~(CF|PF|AF|ZF|SF|OF);
  if(r<a)f|=CF;
@@ -1745,7 +1745,7 @@ static void set_adc_flags(uint32_t a,uint32_t b,uint32_t cin,uint32_t r){
  if(parity_even8(r))f|=PF;
  if(r==0)f|=ZF;
  if(r&0x80000000u)f|=SF;
- if(((~(a^bb))&(a^r)&0x80000000u)!=0)f|=OF;
+ if(((a^r)&(b^r)&0x80000000u)!=0)f|=OF;(void)bb;
  eflags=f;
 }
 static void set_sbb_flags(uint32_t a,uint32_t b,uint32_t bin,uint32_t r){
@@ -1755,7 +1755,7 @@ static void set_sbb_flags(uint32_t a,uint32_t b,uint32_t bin,uint32_t r){
  if(parity_even8(r))f|=PF;
  if(r==0)f|=ZF;
  if(r&0x80000000u)f|=SF;
- if(((a^bb)&(a^r)&0x80000000u)!=0)f|=OF;
+ if(((a^b)&(a^r)&0x80000000u)!=0)f|=OF;(void)bb;
  eflags=f;
 }
 static void set_sub_flags_width(uint32_t a,uint32_t b,uint32_t r,uint32_t bits){
