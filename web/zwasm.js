@@ -512,7 +512,7 @@ class GuestRuntime {
   verifyImage(label) {
     if (!this.guestPe || !this.instance) return;
     const base = this.instance.exports.x86_get_image_base ? this.instance.exports.x86_get_image_base() : 0x400000;
-    for (const line of ZWASMHost.verifyImage(this.instance.exports.memory.buffer, this.guestPe, base)) log("image " + label + ": " + line);
+    for (const line of ZWASMHost.verifyImage(this.instance.exports.memory.buffer, this.guestPe, base, this.instance.exports)) log("image " + label + ": " + line);
   }
 
   reportUnresolved() {
