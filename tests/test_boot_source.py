@@ -54,6 +54,7 @@ def test_builder_supports_self_contained_x86_runtime():
     assert '--runtime' in source
     assert '--guest' in source
     assert 'runtime/x86' in source or 'X86_RUNTIME_SOURCE' in source
-    assert 'zwasm_guest' in source
-    assert 'guest.pe' in source
+    packager = (ROOT / "packager" / "zwasm_pack.py").read_text(encoding="utf-8")
+    assert 'zwasm_guest/guest.pe' in packager
+    assert 'guest.pe' in packager
     assert 'runtime.wasm' in source
