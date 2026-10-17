@@ -21,4 +21,5 @@ jobs:
       - run: node --check web/zwasm.js
       - run: node --check web/zwasm_host.js
       - run: node tests/test_zdll_loader.js
+      - run: node tests/test_api_loading_contract.js
       - run: python -m py_compile packager/*.py tools/*.py
