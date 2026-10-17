@@ -504,6 +504,30 @@ class GuestRuntime {
     log("imports: " + ex.x86_get_import_resolved() + "/" + ex.x86_get_import_count() + " resolved, " + ex.x86_get_import_failed() + " failed · xapi functions: " + ex.x86_get_xapi_count());
 
     this.verifyImage("before run");
+    if (typeof ex.x86_dll_initialize_all === "function") {
+      const initResult = ex.x86_dll_initialize_all() | 0;
+      if (initResult < 0) {
+        const hex = (v) => "0x" + (v >>> 0).toString(16);
+        let moduleName = "";
+        if (ex.x86_dll_get_init_fail_name_byte) {
+          for (let j = 0; j < 96; j++) {
+            const ch = ex.x86_dll_get_init_fail_name_byte(j);
+            if (!ch) break;
+            moduleName += String.fromCharCode(ch);
+          }
+        }
+        const stage = ex.x86_dll_get_init_fail_stage?.() ?? 0;
+        const stageName = ({1:"TLS setup",2:"DLL TLS callback",3:"DllMain",4:"EXE TLS callback"})[stage] ?? "unknown initialization stage";
+        log("native DLL initialization FAILED module=" + (moduleName || "<executable>") +
+            " stage=" + stageName + " target=" + hex(ex.x86_dll_get_init_fail_target?.() ?? 0) +
+            " eip=" + hex(ex.x86_dll_get_init_fail_eip?.() ?? 0) +
+            " error=" + hex(ex.x86_dll_get_init_fail_error?.() ?? 0));
+        this.running = false; $("#runtimeState").textContent = "ERROR"; setStatus("Native DLL initialization failed");
+        this.diagnostics("native DLL initialization failed");
+        return;
+      }
+      log("native DLL initialization completed: " + initResult + " modules; TLS callbacks and entrypoints processed");
+    }
     this.running = true; $("#runtimeState").textContent = "RUNNING"; setStatus("Running");
     log("x86 runtime online; image base=0x" + (ex.x86_get_image_base?.() ?? 0).toString(16));
     this.loop();
@@ -576,6 +600,23 @@ class GuestRuntime {
           " module-size=" + hex(size) + " section=" + (secName || "<no-section>") +
           " section-rva=" + hex(secRva) + " section-span=" + hex(secSize) + " characteristics=" + hex(secFlags));
     };
+    if ((ex.x86_dll_get_init_fail_stage?.() ?? 0) !== 0) {
+      const stage = ex.x86_dll_get_init_fail_stage();
+      let moduleName = "";
+      if (ex.x86_dll_get_init_fail_name_byte) {
+        for (let j = 0; j < 96; j++) {
+          const ch = ex.x86_dll_get_init_fail_name_byte(j);
+          if (!ch) break;
+          moduleName += String.fromCharCode(ch);
+        }
+      }
+      log("diag: native DLL initialization failed module=" + (moduleName || "<executable>") +
+          " stage=" + stage + " target=" + hex(ex.x86_dll_get_init_fail_target?.() ?? 0) +
+          " eip=" + hex(ex.x86_dll_get_init_fail_eip?.() ?? 0) +
+          " error=" + hex(ex.x86_dll_get_init_fail_error?.() ?? 0));
+      describeAddress("dll-init-target", ex.x86_dll_get_init_fail_target?.() ?? 0);
+      describeAddress("dll-init-fault-eip", ex.x86_dll_get_init_fail_eip?.() ?? 0);
+    }
     describeAddress("fault-eip", ex.x86_get_eip());
     if (ex.x86_get_control_fault_target && ex.x86_get_control_fault_slot) {
       const cfKind = ex.x86_get_control_fault_kind?.() ?? 0;
