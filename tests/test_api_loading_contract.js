@@ -44,6 +44,17 @@ assert.match(batch, /--work-dir/,
 
 assert.match(runtime, /import_rva,import_size/,
   "loaded DLL records must preserve their import directory");
+
+assert.match(runtime, /#define X86_MEM_REGION_MAX 4096u/,
+  "guest memory-region metadata must not exhaust during CRT startup allocations");
+assert.match(runtime, /X\(_callnewh,1,0\)/,
+  "the CRT new-handler probe must resolve rather than trap");
+assert.match(runtime, /case SHIM_free:x86_crt_free_impl\(ARG\(0\)\);break;/,
+  "free must release CRT allocation records");
+assert.match(runtime, /case SHIM_realloc:r=x86_crt_realloc_impl\(ARG\(0\),ARG\(1\)\);break;/,
+  "realloc must use the CRT allocation tracker");
+assert.match(runtime, /x86_dll_name_equal\(dll,m->requested_name\)/,
+  "DLL resolution must accept a loaded module's requested filename as well as its internal export name");
 const rebindStart = runtime.indexOf("static void x86_dll_rebind_all(void){");
 const rebindStop = runtime.indexOf("/* Implicit TLS", rebindStart);
 assert.ok(rebindStart >= 0 && rebindStop > rebindStart,
