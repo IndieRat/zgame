@@ -1329,9 +1329,14 @@ static uint32_t shim_call(uint32_t idx){
    break;
   }
   case SHIM_strcpy:case SHIM__strdup:{
-   uint32_t d=ARG(0),s=ARG(1),i=0;
-   if(idx==SHIM__strdup){s=ARG(0);uint32_t n=0;while(MEM8(s+n))n++;d=x86_crt_malloc_impl(n+1u);if(!d)break;}
-   for(;i<0x100000u;i++){uint8_t v=MEM8(s+i);wr8(d+i,v);if(!v)break;}r=d;break;
+   uint32_t d=0,s=0,i=0;
+   if(idx==SHIM__strdup){
+    s=ARG(0);uint32_t n=0;while(n<0x100000u&&MEM8(s+n))n++;
+    if(n>=0x100000u)break;
+    d=x86_crt_malloc_impl(n+1u);if(!d)break;
+   }else{d=ARG(0);s=ARG(1);}
+   for(;i<0x100000u;i++){uint8_t v=MEM8(s+i);wr8(d+i,v);if(!v)break;}
+   r=d;break;
   }
   case SHIM_strncpy:{
    uint32_t d=ARG(0),s=ARG(1),n=ARG(2),i=0;
