@@ -3264,9 +3264,15 @@ static int cpu_step_legacy(void){
      x86_control_fault_target=target;x86_control_fault_slot=ea;x86_control_fault_opcode=0xFFu;x86_control_fault_modrm=m;
      x86_gdr_note_call(ea);
      cpu_error=0xFF20u;return -63;
-    }else{
-     x86_control_fault_kind=3u;x86_control_fault_eip=eip;x86_control_fault_next_eip=next;
-     x86_control_fault_target=target;x86_control_fault_slot=ea;x86_control_fault_opcode=0xFFu;x86_control_fault_modrm=m;
+    }else if(target<API_BASE||target>=API_UNRESOLVED_BASE){
+     /* A call/jump into a mapped guest DLL or a known host API address is a
+      * legitimate cross-module transfer, not itself a control-flow fault.
+      * Only retain the diagnostic when the target has no registered executable
+      * region and is outside the runtime's host API address space. */
+     if(!x86_mem_region_find(target,1u,X86_MEM_EXEC)){
+      x86_control_fault_kind=3u;x86_control_fault_eip=eip;x86_control_fault_next_eip=next;
+      x86_control_fault_target=target;x86_control_fault_slot=ea;x86_control_fault_opcode=0xFFu;x86_control_fault_modrm=m;
+     }
     }
    }
    if(sub==2){
