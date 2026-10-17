@@ -3247,7 +3247,7 @@ static void scan_imports(void){
 #define X86_DLL_MAX_RESOURCES 64u
 #define X86_DLL_BASE 0x05000000u
 #define X86_DLL_STRIDE 0x00800000u
-typedef struct{uint32_t active,base,size,preferred,entry,reloc_rva,reloc_size,export_rva,export_size,imports_resolved,imports_failed,refcount;char name[96];char requested_name[96];}x86_dll_module_t;
+typedef struct{uint32_t active,base,size,preferred,entry,reloc_rva,reloc_size,import_rva,import_size,export_rva,export_size,imports_resolved,imports_failed,refcount;char name[96];char requested_name[96];}x86_dll_module_t;
 typedef struct{uint32_t active,data,size;char name[96];}x86_dll_resource_t;
 static x86_dll_module_t x86_dll_modules[X86_DLL_MAX_MODULES];
 static x86_dll_resource_t x86_dll_resources[X86_DLL_MAX_RESOURCES];
@@ -3363,7 +3363,7 @@ static int x86_dll_load_image(uint32_t f,uint32_t sz,uint32_t requested_name){
  for(uint32_t i=0;i<isz;i++)wr8(base+i,0);copy_bytes(base,f,hsz);
  for(uint16_t i=0;i<nsec;i++,sh+=40u){uint32_t va=rd32(sh+12u),vsz=rd32(sh+8u),raw=rd32(sh+20u),rawsz=rd32(sh+16u),mapped=vsz>rawsz?vsz:rawsz;if(va+mapped<va||va+mapped>isz||raw>sz||rawsz>sz-raw){x86_dll_last_error=9;return 0;}if(rawsz)copy_bytes(base+va,f+raw,rawsz);}
  if(!x86_dll_apply_relocs(base,isz,pref,rr,rs)){x86_dll_last_error=10;return 0;}
- uint32_t ok=0,bad=0; x86_dll_modules[slot]=(x86_dll_module_t){0}; x86_dll_modules[slot].active=1u; x86_dll_modules[slot].base=base; x86_dll_modules[slot].size=isz; x86_dll_modules[slot].preferred=pref; x86_dll_modules[slot].entry=entry; x86_dll_modules[slot].reloc_rva=rr; x86_dll_modules[slot].reloc_size=rs; x86_dll_modules[slot].export_rva=er; x86_dll_modules[slot].export_size=es; x86_dll_modules[slot].refcount=1u;
+ uint32_t ok=0,bad=0; x86_dll_modules[slot]=(x86_dll_module_t){0}; x86_dll_modules[slot].active=1u; x86_dll_modules[slot].base=base; x86_dll_modules[slot].size=isz; x86_dll_modules[slot].preferred=pref; x86_dll_modules[slot].entry=entry; x86_dll_modules[slot].reloc_rva=rr; x86_dll_modules[slot].reloc_size=rs; x86_dll_modules[slot].import_rva=ir; x86_dll_modules[slot].import_size=is; x86_dll_modules[slot].export_rva=er; x86_dll_modules[slot].export_size=es; x86_dll_modules[slot].refcount=1u;
  if(er&&er+40u<=isz){uint32_t modrva=rd32(base+er+12u);if(modrva<isz){uint32_t p=base+modrva,j=0;for(;j<95u&&j<sizeof(x86_dll_modules[slot].name)-1u&&MEM8(p+j);j++)x86_dll_modules[slot].name[j]=(char)MEM8(p+j);x86_dll_modules[slot].name[j]=0;}}
  uint32_t rp=requested_name,j=0;for(;j<95u&&j<sizeof(x86_dll_modules[slot].requested_name)-1u&&MEM8(rp+j);j++)x86_dll_modules[slot].requested_name[j]=(char)MEM8(rp+j);x86_dll_modules[slot].requested_name[j]=0;
  x86_dll_resolve_imports(base,isz,ir,is,&ok,&bad);x86_dll_modules[slot].imports_resolved=ok;x86_dll_modules[slot].imports_failed=bad;x86_dll_last_base=base;x86_dll_last_error=0;return slot+1;
@@ -3384,7 +3384,20 @@ static uint32_t x86_dll_load_registered(uint32_t name){
  x86_dll_last_error=13;return 0;
 }
 static uint32_t x86_dll_module_for_name(uint32_t name){uint32_t p=x86_dll_basename_ptr(name);int i=x86_dll_find_loaded(p);if(i>=0)return x86_dll_modules[i].base;return x86_dll_ascii_module_name(p)?image_base:0;}
-static void x86_dll_rebind_all(void){if(loaded)scan_imports();}
+static void x86_dll_rebind_all(void){
+ if(loaded)scan_imports();
+ /* Revisit every loaded native DLL too: resolving the main executable's IAT
+  * does not update DLL-to-DLL imports that were unresolved when the dependent
+  * module first loaded. */
+ for(uint32_t i=0;i<X86_DLL_MAX_MODULES;i++){
+  x86_dll_module_t*m=&x86_dll_modules[i];
+  if(!m->active)continue;
+  uint32_t ok=0,bad=0;
+  x86_dll_resolve_imports(m->base,m->size,m->import_rva,m->import_size,&ok,&bad);
+  m->imports_resolved=ok;
+  m->imports_failed=bad;
+ }
+}
 
 /* Implicit TLS (__declspec(thread) / the CRT's own per-thread state): the PE TLS directory describes a template
  * that every thread gets a private copy of. This runtime has one guest thread, so build that copy once and
