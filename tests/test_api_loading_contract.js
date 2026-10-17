@@ -120,4 +120,11 @@ assert.match(runtime, /export_name\("x86_dll_get_init_skipped_count"\)/,
 assert.match(loader, /native DLL imports unresolved:/,
   "the shell must report per-DLL unresolved imports before initialization");
 
+assert.match(runtime, /x86_dll_init_capture_import_for_slot/,
+  "native DLL initialization faults must trace unresolved IAT slots back to DLL and function names");
+assert.match(runtime, /!x86_dll_cname_equal\(m->requested_name,"steam_api\.dll"\)/,
+  "the packed Steam API DLL must still be offered initialization when its imports are partially unresolved");
+assert.match(loader, /native DLL initializer trapped on unresolved import:/,
+  "the loader must identify the missing import when a native DLL initializer traps");
+
 console.log("API loading contract tests passed");
