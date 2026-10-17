@@ -57,6 +57,16 @@ assert.match(runtime, /case SHIM_GetCursorPos/,
   "cursor position calls must have safe output handling");
 assert.match(runtime, /case SHIM_timeGetDevCaps/,
   "multimedia capability queries must resolve with a compatible return code");
+assert.match(runtime, /case SHIM_BringWindowToTop/,
+  "window-management imports must not fall through to unresolved traps");
+assert.match(runtime, /case SHIM_GetProcessTimes/,
+  "common Kernel32 system information queries must write defined outputs");
+
+const host = fs.readFileSync(path.join(root, "web", "zwasm_host.js"), "utf8");
+assert.match(host, /dynamicIatBytes\.has\(va \+ k\)/,
+  "image verification must ignore IAT bytes changed by successful import binding");
+assert.match(loader, /this\.guestPe, base, this\.instance\.exports/,
+  "runtime import metadata must be supplied to the image verifier");
 assert.match(runtime, /case SHIM_free:x86_crt_free_impl\(ARG\(0\)\);break;/,
   "free must release CRT allocation records");
 assert.match(runtime, /case SHIM_realloc:r=x86_crt_realloc_impl\(ARG\(0\),ARG\(1\)\);break;/,
