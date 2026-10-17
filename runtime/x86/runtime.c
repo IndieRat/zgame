@@ -1185,12 +1185,13 @@ static uint32_t shim_call(uint32_t idx){
   case SHIM_BringWindowToTop:case SHIM_ClipCursor:case SHIM_ReleaseCapture:
   case SHIM_SetForegroundWindow:case SHIM_SetActiveWindow:case SHIM_SetWindowPos:
   case SHIM_MoveWindow:case SHIM_DestroyWindow:case SHIM_UpdateLayeredWindow:
-  case SHIM_AdjustWindowRect:case SHIM_CoInitializeEx:case SHIM_CoInitialize:
-  case SHIM_CoUninitialize:case SHIM_DeleteDC:case SHIM_DescribePixelFormat:
-  case SHIM_GetProcessTimes:case SHIM_GetNumaProcessorNode:
-  case SHIM_GetNumaHighestNodeNumber:case SHIM_VirtualUnlock:
-  case SHIM_GetNumaNodeProcessorMask:case SHIM_TimeGetDevCaps:
+  case SHIM_AdjustWindowRect:case SHIM_DeleteDC:case SHIM_DescribePixelFormat:
+  case SHIM_GetProcessTimes:case SHIM_VirtualUnlock:
+  case SHIM_GetNumaProcessorNode:case SHIM_GetNumaNodeProcessorMask:
    r=1u;break;
+  case SHIM_CoInitializeEx:case SHIM_CoInitialize:case SHIM_CoUninitialize:r=0u;break;
+  case SHIM_GetNumaHighestNodeNumber:{uint32_t p=ARG(0);if(p)wr32(p,0u);r=1u;break;}
+  case SHIM_timeGetDevCaps:{uint32_t p=ARG(0),n=ARG(1);if(p&&n>=8u){wr32(p,1u);wr32(p+4u,1000u);}r=0u;break;}
   case SHIM_SetCapture:case SHIM_SetCursor:case SHIM_SetFocus:
   case SHIM_GetActiveWindow:case SHIM_GetForegroundWindow:
   case SHIM_GetDesktopWindow:r=0u;break;
@@ -1209,12 +1210,10 @@ static uint32_t shim_call(uint32_t idx){
   case SHIM_GetCurrentProcessorNumber:r=0u;break;
   case SHIM_K32GetProcessMemoryInfo:{uint32_t p=ARG(1),sz=ARG(2);if(p&&sz){for(uint32_t i=0;i<sz&&i<128u;i+=4u)wr32(p+i,0);wr32(p,sz);}r=1u;break;}
   case SHIM_OpenProcessToken:case SHIM_LookupPrivilegeValueA:case SHIM_AdjustTokenPrivileges:r=0u;break;
-  case SHIM_timeGetDevCaps:{uint32_t p=ARG(0),n=ARG(1);if(p&&n>=8u){wr32(p,1u);wr32(p+4u,1000u);}r=0u;break;}
   case SHIM_LoadCursorA:case SHIM_LoadIconA:r=1u;break;
   case SHIM_SetWindowTextA:r=1u;break;
   case SHIM_GetWindowTextA:{uint32_t out=ARG(1),cap=ARG(2);if(out&&cap)wr8(out,0);r=0u;break;}
   case SHIM_GetWindowTextLengthA:r=0u;break;
-  case SHIM_GetLargePageMinimum:r=0u;break;
   case SHIM_UnhandledExceptionFilter:{
    /* Guest is reporting a fatal condition. Freeze here so the trace/stack still show what led to it. */
    if(!crash_hit){
