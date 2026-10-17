@@ -92,4 +92,11 @@ assert.match(loader, /describeAddress\("fault-eip"/,
 assert.match(loader, /describeAddress\("control-target"/,
   "indirect control-flow diagnostics must identify the target module and PE section");
 
+assert.match(runtime, /legitimate cross-module transfer/,
+  "valid host API and mapped DLL targets must not be reported as bad control transfers");
+assert.match(loader, /formatTrace\(ex, 64\)/,
+  "crash diagnostics must preserve enough trace history to locate the first bad branch");
+assert.match(loader, /dumpPeBytes\("call-chain-.*-callee"/,
+  "crash diagnostics must dump bytes at caller/callee addresses when they map to PE images");
+
 console.log("API loading contract tests passed");
