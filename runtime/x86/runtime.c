@@ -1186,9 +1186,16 @@ static uint32_t shim_call(uint32_t idx){
   case SHIM_SetForegroundWindow:case SHIM_SetActiveWindow:case SHIM_SetWindowPos:
   case SHIM_MoveWindow:case SHIM_DestroyWindow:case SHIM_UpdateLayeredWindow:
   case SHIM_AdjustWindowRect:case SHIM_DeleteDC:case SHIM_DescribePixelFormat:
-  case SHIM_GetProcessTimes:case SHIM_VirtualUnlock:
-  case SHIM_GetNumaProcessorNode:case SHIM_GetNumaNodeProcessorMask:
+  case SHIM_VirtualUnlock:r=1u;break;
+  case SHIM_GetProcessTimes:{
+   for(uint32_t i=1;i<=4u;i++){uint32_t p=ARG(i);if(p){wr32(p,0);wr32(p+4u,0);}}
    r=1u;break;
+  }
+  case SHIM_GetNumaProcessorNode:{uint32_t p=ARG(1);if(p)wr8(p,0);r=1u;break;}
+  case SHIM_GetNumaNodeProcessorMask:{
+   uint32_t p=ARG(1);if(p){wr32(p,1u);wr32(p+4u,0);wr16(p+8u,0);wr16(p+10u,0);wr16(p+12u,0);wr16(p+14u,0);}
+   r=1u;break;
+  }
   case SHIM_CoInitializeEx:case SHIM_CoInitialize:case SHIM_CoUninitialize:r=0u;break;
   case SHIM_GetNumaHighestNodeNumber:{uint32_t p=ARG(0);if(p)wr32(p,0u);r=1u;break;}
   case SHIM_timeGetDevCaps:{uint32_t p=ARG(0),n=ARG(1);if(p&&n>=8u){wr32(p,1u);wr32(p+4u,1000u);}r=0u;break;}
