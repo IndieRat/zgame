@@ -34,7 +34,7 @@ def make_pe32(path: Path) -> bytes:
 def test_builder_maps_sections_and_writes_manifest(tmp_path):
     exe = tmp_path / "test.exe"
     image = tmp_path / "image.bin"
-    make_pe32(exe)
+    exe.write_bytes(make_pe32(exe))
     subprocess.run(
         [sys.executable, str(SCRIPT), str(exe), "-o", str(image)],
         check=True,
