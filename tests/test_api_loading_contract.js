@@ -6,6 +6,7 @@ const root = path.join(__dirname, "..");
 const loader = fs.readFileSync(path.join(root, "web", "zwasm.js"), "utf8");
 const builder = fs.readFileSync(path.join(root, "tools", "zwasm_build.py"), "utf8");
 const batch = fs.readFileSync(path.join(root, "tools", "build_isaac_179c.bat"), "utf8");
+const runtime = fs.readFileSync(path.join(root, "runtime", "x86", "runtime.c"), "utf8");
 
 assert.equal(loader.includes("skipping legacy wasm zdll loader"), false,
   "obsolete top-level ZDLL stub must not remain");
@@ -39,5 +40,18 @@ assert.match(batch, /C:\\TBOIRG\\The Binding of Isaac Rebirth Repentance v1\.7\.
   "the convenience build script must target the requested Isaac directory");
 assert.match(batch, /--work-dir/,
   "the convenience build script must keep generated files outside the game install");
+
+
+assert.match(runtime, /import_rva,import_size/,
+  "loaded DLL records must preserve their import directory");
+const rebindStart = runtime.indexOf("static void x86_dll_rebind_all(void){");
+const rebindStop = runtime.indexOf("/* Implicit TLS", rebindStart);
+assert.ok(rebindStart >= 0 && rebindStop > rebindStart,
+  "native DLL rebind implementation must exist");
+const rebind = runtime.slice(rebindStart, rebindStop);
+assert.match(rebind, /if\(loaded\)scan_imports\(\)/,
+  "rebind should refresh the main executable IAT");
+assert.match(rebind, /x86_dll_resolve_imports\(m->base,m->size,m->import_rva,m->import_size,&ok,&bad\)/,
+  "rebind should revisit loaded DLL dependency imports");
 
 console.log("API loading contract tests passed");
