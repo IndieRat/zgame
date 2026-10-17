@@ -3402,7 +3402,7 @@ static uint32_t x86_dll_last_error=0,x86_dll_last_base=0;
  * before an imported function is callable; the guest loader must do likewise. */
 #define X86_DLL_INIT_SENTINEL 0xF00DD11Au
 #define X86_DLL_INIT_STEP_LIMIT 5000000u
-static uint32_t x86_dll_init_count=0;
+static uint32_t x86_dll_init_count=0,x86_dll_init_skipped_count=0;
 static uint32_t x86_dll_init_fail_module=0xFFFFFFFFu;
 static uint32_t x86_dll_init_fail_stage=0;
 static uint32_t x86_dll_init_fail_target=0;
@@ -3850,9 +3850,18 @@ static int x86_dll_initialize_dependencies(uint32_t index){
 static int x86_dll_initialize_one(uint32_t index){
  if(index>=X86_DLL_MAX_MODULES||!x86_dll_modules[index].active)return 1;
  x86_dll_module_t*m=&x86_dll_modules[index];
- if(m->init_state==2u)return 1;
+ if(m->init_state==2u||m->init_state==4u)return 1;
  if(m->init_state==1u)return 1; /* circular import dependency */
  if(m->init_state==3u)return 0;
+ /* A native PE with unresolved imports is not loadable by the Windows
+  * loader. Do not execute TLS callbacks or DllMain against trap-filled IAT
+  * slots; retain the mapped image and let diagnostics report the missing
+  * imports if the executable later tries to call one of its exports. */
+ if(m->imports_failed){
+  m->init_state=4u;
+  x86_dll_init_skipped_count++;
+  return 1;
+ }
  m->init_state=1u;
  if(!x86_dll_initialize_dependencies(index)){
   if(x86_dll_init_fail_module==0xFFFFFFFFu)x86_dll_init_fail_module=index;
@@ -3895,7 +3904,7 @@ static int x86_dll_initialize_one(uint32_t index){
  m->init_state=2u;x86_dll_init_count++;return 1;
 }
 __attribute__((export_name("x86_dll_initialize_all"))) int32_t x86_dll_initialize_all(void){
- x86_dll_init_count=0;x86_dll_init_fail_module=0xFFFFFFFFu;x86_dll_init_fail_stage=0u;
+ x86_dll_init_count=0;x86_dll_init_skipped_count=0;x86_dll_init_fail_module=0xFFFFFFFFu;x86_dll_init_fail_stage=0u;
  x86_dll_init_fail_target=0u;x86_dll_init_fail_eip=0u;x86_dll_init_fail_error=0u;x86_dll_tls_next_index=1u;
  for(uint32_t i=0;i<X86_DLL_MAX_MODULES;i++)if(x86_dll_modules[i].active)x86_dll_modules[i].init_state=0u;
  for(uint32_t i=0;i<X86_DLL_MAX_MODULES;i++)if(x86_dll_modules[i].active&&!x86_dll_initialize_one(i))return -1;
@@ -3920,6 +3929,7 @@ __attribute__((export_name("x86_dll_initialize_all"))) int32_t x86_dll_initializ
  return (int32_t)x86_dll_init_count;
 }
 __attribute__((export_name("x86_dll_get_init_count"))) uint32_t x86_dll_get_init_count(void){return x86_dll_init_count;}
+__attribute__((export_name("x86_dll_get_init_skipped_count"))) uint32_t x86_dll_get_init_skipped_count(void){return x86_dll_init_skipped_count;}
 __attribute__((export_name("x86_dll_get_init_fail_module"))) uint32_t x86_dll_get_init_fail_module(void){return x86_dll_init_fail_module;}
 __attribute__((export_name("x86_dll_get_init_fail_stage"))) uint32_t x86_dll_get_init_fail_stage(void){return x86_dll_init_fail_stage;}
 __attribute__((export_name("x86_dll_get_init_fail_target"))) uint32_t x86_dll_get_init_fail_target(void){return x86_dll_init_fail_target;}
