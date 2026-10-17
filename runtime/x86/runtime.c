@@ -996,7 +996,7 @@ static uint32_t guest_alloc_raw(uint32_t n){
  X(K32GetProcessMemoryInfo,3,1) X(GetNumaNodeProcessorMask,2,1) \
  X(CoInitializeEx,2,1) X(CoInitialize,1,1) X(CoUninitialize,0,1) X(SHFileOperationA,1,1) \
  X(OpenProcessToken,3,1) X(LookupPrivilegeValueA,3,1) X(AdjustTokenPrivileges,6,1) \
- X(timeGetDevCaps,2,1)
+ X(timeGetDevCaps,2,1) \
  X(CreateEventW,4,1) X(SetEvent,1,1) X(ResetEvent,1,1) X(WaitForSingleObject,2,1) X(WaitForSingleObjectEx,3,1) \
  X(GetProcAddress,2,1) X(LoadLibraryA,1,1) X(LoadLibraryExA,3,1) X(LoadLibraryExW,3,1) X(LoadLibraryW,1,1) X(FreeLibrary,1,1) X(GetFileAttributesA,1,1) \
  X(timeGetTime,0,1) X(timeBeginPeriod,1,1) X(timeEndPeriod,1,1) \
