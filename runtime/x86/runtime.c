@@ -982,6 +982,21 @@ static uint32_t guest_alloc_raw(uint32_t n){
  X(Sleep,1,1) X(GetStdHandle,1,1) X(GetSystemInfo,1,1) X(GetLocalTime,1,1) X(GetEnvironmentVariableA,3,1) \
  X(GetCurrentDirectoryA,2,1) X(GlobalAlloc,2,1) X(GlobalLock,1,1) X(GlobalUnlock,1,1) \
  X(SetThreadExecutionState,1,1) X(SetThreadPriority,2,1) X(VirtualQuery,3,1) X(WriteConsoleA,5,1) \
+ X(BringWindowToTop,1,1) X(SetCapture,1,1) X(SetCursor,1,1) X(SetFocus,1,1) \
+ X(ClipCursor,1,1) X(ReleaseCapture,0,1) X(SetForegroundWindow,1,1) X(ShowCursor,1,1) \
+ X(SetActiveWindow,1,1) X(GetActiveWindow,0,1) X(GetForegroundWindow,0,1) X(GetDesktopWindow,0,1) \
+ X(IsWindow,1,1) X(IsWindowVisible,1,1) X(IsIconic,1,1) X(IsZoomed,1,1) X(GetSystemMetrics,1,1) \
+ X(GetCursorPos,1,1) X(SetCursorPos,2,1) X(GetWindowRect,2,1) X(ClientToScreen,2,1) X(ScreenToClient,2,1) \
+ X(GetWindowThreadProcessId,2,1) X(SetWindowPos,7,1) X(MoveWindow,6,1) X(DestroyWindow,1,1) \
+ X(UpdateLayeredWindow,8,1) X(LoadCursorA,2,1) X(LoadIconA,2,1) X(SetWindowTextA,2,1) \
+ X(GetWindowTextA,3,1) X(GetWindowTextLengthA,1,1) X(AdjustWindowRect,3,1) \
+ X(GetDeviceCaps,2,1) X(DeleteDC,1,1) X(DescribePixelFormat,4,1) X(CreateDCA,4,1) \
+ X(GetProcessTimes,5,1) X(GetNumaProcessorNode,2,1) X(GetNumaHighestNodeNumber,1,1) \
+ X(VirtualUnlock,2,1) X(GetLargePageMinimum,0,1) X(GetCurrentProcessorNumber,0,1) \
+ X(K32GetProcessMemoryInfo,3,1) X(GetNumaNodeProcessorMask,2,1) \
+ X(CoInitializeEx,2,1) X(CoInitialize,1,1) X(CoUninitialize,0,1) X(SHFileOperationA,1,1) \
+ X(OpenProcessToken,3,1) X(LookupPrivilegeValueA,3,1) X(AdjustTokenPrivileges,6,1) \
+ X(timeGetDevCaps,2,1)
  X(CreateEventW,4,1) X(SetEvent,1,1) X(ResetEvent,1,1) X(WaitForSingleObject,2,1) X(WaitForSingleObjectEx,3,1) \
  X(GetProcAddress,2,1) X(LoadLibraryA,1,1) X(LoadLibraryExA,3,1) X(LoadLibraryExW,3,1) X(LoadLibraryW,1,1) X(FreeLibrary,1,1) X(GetFileAttributesA,1,1) \
  X(timeGetTime,0,1) X(timeBeginPeriod,1,1) X(timeEndPeriod,1,1) \
@@ -1009,6 +1024,7 @@ static const struct{const char*name;uint8_t argc,callee_pops;}shim_tab[]={
 };
 static uint32_t shim_tls[64],shim_fls[64],shim_tls_next=0,shim_fls_next=0,shim_handle=0x100u;
 static uint32_t shim_qpc=0,shim_ft_lo=0xD53E8000u,shim_ft_hi=0x01DC0000u;
+static int32_t shim_cursor_count=0;
 static uint32_t shim_initterm=0,shim_initterm_e=0,shim_argc_p=0,shim_argv_p=0,shim_env_p=0,shim_commode_p=0,shim_errno_p=0,shim_onexit_dummy=0;
 static int x87_push(double v);
 /* ---- XAPI registry: functions described by .xapi manifests ----------------
@@ -1166,6 +1182,39 @@ static uint32_t shim_call(uint32_t idx){
   case SHIM_QueryPerformanceFrequency:{uint32_t p=ARG(0);wr32(p,10000000u);wr32(p+4u,0);r=1;break;}
   case SHIM_IsProcessorFeaturePresent:{uint32_t f=ARG(0);r=(f==6u||f==10u||f==13u)?1u:0u;break;} /* SSE, SSE2, SSE3: advertise what the CPU implements */
   case SHIM_InitializeSListHead:{uint32_t p=ARG(0);wr32(p,0);wr32(p+4u,0);break;}
+  case SHIM_BringWindowToTop:case SHIM_ClipCursor:case SHIM_ReleaseCapture:
+  case SHIM_SetForegroundWindow:case SHIM_SetActiveWindow:case SHIM_SetWindowPos:
+  case SHIM_MoveWindow:case SHIM_DestroyWindow:case SHIM_UpdateLayeredWindow:
+  case SHIM_AdjustWindowRect:case SHIM_CoInitializeEx:case SHIM_CoInitialize:
+  case SHIM_CoUninitialize:case SHIM_DeleteDC:case SHIM_DescribePixelFormat:
+  case SHIM_GetProcessTimes:case SHIM_GetNumaProcessorNode:
+  case SHIM_GetNumaHighestNodeNumber:case SHIM_VirtualUnlock:
+  case SHIM_GetNumaNodeProcessorMask:case SHIM_TimeGetDevCaps:
+   r=1u;break;
+  case SHIM_SetCapture:case SHIM_SetCursor:case SHIM_SetFocus:
+  case SHIM_GetActiveWindow:case SHIM_GetForegroundWindow:
+  case SHIM_GetDesktopWindow:r=0u;break;
+  case SHIM_ShowCursor:shim_cursor_count+=ARG(0)?1:-1;r=(uint32_t)shim_cursor_count;break;
+  case SHIM_IsWindow:case SHIM_IsWindowVisible:r=1u;break;
+  case SHIM_IsIconic:case SHIM_IsZoomed:r=0u;break;
+  case SHIM_GetSystemMetrics:{uint32_t i=ARG(0);r=i==0u?surface_width:(i==1u?surface_height:0u);break;}
+  case SHIM_GetCursorPos:{uint32_t p=ARG(0);if(p){wr32(p,0);wr32(p+4u,0);r=1u;}break;}
+  case SHIM_SetCursorPos:r=1u;break;
+  case SHIM_GetWindowRect:{uint32_t p=ARG(1);if(p){wr32(p,0);wr32(p+4u,0);wr32(p+8u,surface_width);wr32(p+12u,surface_height);r=1u;}break;}
+  case SHIM_ClientToScreen:case SHIM_ScreenToClient:r=1u;break;
+  case SHIM_GetWindowThreadProcessId:{uint32_t p=ARG(1);if(p)wr32(p,0x1234u);r=1u;break;}
+  case SHIM_GetDeviceCaps:{uint32_t cap=ARG(1);r=cap==8u?surface_width:(cap==10u?surface_height:(cap==12u?32u:(cap==14u?1u:0u)));break;}
+  case SHIM_CreateDCA:r=1u;break;
+  case SHIM_GetLargePageMinimum:r=0u;break;
+  case SHIM_GetCurrentProcessorNumber:r=0u;break;
+  case SHIM_K32GetProcessMemoryInfo:{uint32_t p=ARG(1),sz=ARG(2);if(p&&sz){for(uint32_t i=0;i<sz&&i<128u;i+=4u)wr32(p+i,0);wr32(p,sz);}r=1u;break;}
+  case SHIM_OpenProcessToken:case SHIM_LookupPrivilegeValueA:case SHIM_AdjustTokenPrivileges:r=0u;break;
+  case SHIM_timeGetDevCaps:{uint32_t p=ARG(0),n=ARG(1);if(p&&n>=8u){wr32(p,1u);wr32(p+4u,1000u);}r=0u;break;}
+  case SHIM_LoadCursorA:case SHIM_LoadIconA:r=1u;break;
+  case SHIM_SetWindowTextA:r=1u;break;
+  case SHIM_GetWindowTextA:{uint32_t out=ARG(1),cap=ARG(2);if(out&&cap)wr8(out,0);r=0u;break;}
+  case SHIM_GetWindowTextLengthA:r=0u;break;
+  case SHIM_GetLargePageMinimum:r=0u;break;
   case SHIM_UnhandledExceptionFilter:{
    /* Guest is reporting a fatal condition. Freeze here so the trace/stack still show what led to it. */
    if(!crash_hit){
