@@ -15,7 +15,6 @@ BRIDGE_SOURCE = ROOT / "runtime" / "bridge.c"
 X86_RUNTIME_SOURCE = ROOT / "runtime" / "x86" / "runtime.c"
 PACKER = ROOT / "packager" / "zwasm_pack.py"
 SAFE_IMAGE_BUILDER = ROOT / "tools" / "zwasm_safe_image_builder.py"
-DLL_CONVERTER = ROOT / "tools" / "zwasm_dll_convert.py"
 
 
 def find_clang(explicit: str | None) -> str:
@@ -185,24 +184,28 @@ def main() -> int:
     else:
         print("[ZWASM] WARNING: no PE guest found")
 
-    dlls = [] if args.no_dlls else sorted(
-        root.glob("*.dll"), key=lambda p: p.name.lower()
-    )
-    
-    generated_zdlls = []
+    # Native Windows DLLs must stay in the guest-DLL path. The .zdll format
+    # is reserved for validated ZDLLG01 WebAssembly bridge modules.
+    dll_candidates = ([] if args.no_dlls else list(root.glob("*.dll")))
+    dll_candidates.extend(args.guest_dll)
 
-    for dll in dlls:
-        zdll = generated / (dll.stem + ".zdll")
-
-        subprocess.run([
-            sys.executable,
-            str(DLL_CONVERTER),
-            str(dll),
-            "-o",
-            str(zdll),
-        ], check=True)
-
-        generated_zdlls.append(zdll)
+    guest_dlls: list[Path] = []
+    seen_dll_names: dict[str, Path] = {}
+    for dll in dll_candidates:
+        resolved = dll.resolve()
+        if not resolved.is_file():
+            raise RuntimeError("guest DLL does not exist: " + str(resolved))
+        key = resolved.name.lower()
+        prior = seen_dll_names.get(key)
+        if prior is not None:
+            if prior != resolved:
+                raise RuntimeError(
+                    "duplicate guest DLL basename: "
+                    + resolved.name + " (" + str(prior) + " and " + str(resolved) + ")"
+                )
+            continue
+        seen_dll_names[key] = resolved
+        guest_dlls.append(resolved)
 
     if image is None and guest is not None and SAFE_IMAGE_BUILDER.is_file():
         generated_image = generated / "image.bin"
@@ -242,8 +245,8 @@ def main() -> int:
     if guest:
         cmd += ["--guest", str(guest)]
 
-    for zdll in generated_zdlls:
-        cmd += ["--zdll", str(zdll)]
+    for dll in guest_dlls:
+        cmd += ["--guest-dll", str(dll)]
 
     for api in [*args.zapi, *args.xapi]:
         cmd += ["--zapi", str(api.resolve())]
