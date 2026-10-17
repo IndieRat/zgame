@@ -31,12 +31,15 @@
   function findZapiEntries(manifest) {
     const listed = Array.isArray(manifest.zapi) ? manifest.zapi : [];
     const entries = manifest.entries || [];
-    const out = listed.map((p) => entries.find((x) => x.path === p)).filter(Boolean);
+    const byPath = (p) => entries.find((e) => e.path === p) || null;
+    const out = listed.map(byPath).filter(Boolean);
     if (out.length) return out;
-    return entries.filter((e) => /\.zapi$/i.test(e.path));
+    // Older packages sometimes omit the explicit list. Do not mistake legacy
+    // XAPI signature manifests for ZAPI bridge manifests in this fallback.
+    return entries.filter((e) => /\.zapi(\.json)?$/i.test(e.path));
   }
 
-	function findZdllEntries(manifest) {
+function findZdllEntries(manifest) {
 		const listed = Array.isArray(manifest.zdlls)
 			? manifest.zdlls
 			: [];
@@ -57,8 +60,12 @@
   function findXapiEntries(manifest) {
     const listed = Array.isArray(manifest.xapi) ? manifest.xapi : [];
     const entries = manifest.entries || [];
-    const out = listed.map((p) => entries.find((x) => x.path === p)).filter(Boolean);
-    return out.length ? out : entries.filter((e) => /\.xapi(\.json)?$/i.test(e.path));
+    const byPath = (p) => entries.find((e) => e.path === p) || null;
+    const out = listed.map(byPath).filter(Boolean);
+    if (out.length) return out;
+    // Legacy XAPI signatures use JSON manifests. A .xapi compatibility alias
+    // listed under manifest.zapi is still handled by the ZAPI loader.
+    return entries.filter((e) => /\.xapi\.json$/i.test(e.path));
   }
 
   /* Decide what a boot module is from what it exports, never from which
