@@ -57,6 +57,66 @@ function findZdllEntries(manifest) {
 			/\.zdll$/i.test(e.path));
 	}
 
+  /* Decode the stable 64-byte ZDLLG01 header plus manifest and WASM payload. */
+  async function decodeZdllContainer(value) {
+    const bytes = value instanceof Uint8Array ? value : new Uint8Array(value);
+    const headerSize = 64;
+    if (bytes.byteLength < headerSize) throw new Error("short ZDLL container");
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    if (new TextDecoder().decode(bytes.slice(0, 8)) !== "ZDLLG01" + String.fromCharCode(0)) {
+      throw new Error("bad ZDLL magic (expected ZDLLG01)");
+    }
+    const version = view.getUint32(8, true);
+    const flags = view.getUint32(12, true);
+    const payloadOffset = Number(view.getBigUint64(16, true));
+    const payloadSize = Number(view.getBigUint64(24, true));
+    if (version !== 1) throw new Error("unsupported ZDLL version " + version);
+    if (flags !== 0) throw new Error("unsupported ZDLL flags " + flags);
+    if (!Number.isSafeInteger(payloadOffset) || !Number.isSafeInteger(payloadSize) ||
+        payloadOffset < headerSize || payloadOffset > bytes.byteLength ||
+        payloadSize !== bytes.byteLength - payloadOffset) {
+      throw new Error("invalid ZDLL payload bounds");
+    }
+
+    const headerDigest = Array.from(bytes.slice(32, 64), b => b.toString(16).padStart(2, "0")).join("");
+    let manifest;
+    try {
+      manifest = JSON.parse(new TextDecoder().decode(bytes.slice(headerSize, payloadOffset)));
+    } catch (error) {
+      throw new Error("invalid ZDLL manifest: " + error.message);
+    }
+    if (!manifest || manifest.schema !== "zwasm.zdll/1" || manifest.formatVersion !== 1) {
+      throw new Error("unsupported ZDLL manifest schema/version");
+    }
+    if (typeof manifest.name !== "string" || !manifest.name.trim()) {
+      throw new Error("ZDLL manifest name must be non-empty");
+    }
+    if (manifest.abi !== "zworld.v1") throw new Error("unsupported ZDLL ABI: " + String(manifest.abi));
+    if (manifest.module !== "module.wasm") throw new Error("unsupported ZDLL module path");
+    if (typeof manifest.sha256 !== "string" || !/^[0-9a-f]{64}$/i.test(manifest.sha256) ||
+        manifest.sha256.toLowerCase() !== headerDigest) {
+      throw new Error("ZDLL header/manifest SHA-256 mismatch");
+    }
+
+    const wasmBytes = bytes.slice(payloadOffset, payloadOffset + payloadSize);
+    if (wasmBytes.byteLength < 8 || wasmBytes[0] !== 0x00 || wasmBytes[1] !== 0x61 ||
+        wasmBytes[2] !== 0x73 || wasmBytes[3] !== 0x6d) {
+      throw new Error("ZDLL payload is not a WebAssembly module");
+    }
+    const subtle = root.crypto && root.crypto.subtle;
+    if (!subtle) throw new Error("Web Crypto SHA-256 is unavailable; use a secure browser context");
+    const digest = await subtle.digest("SHA-256", wasmBytes);
+    const actualDigest = Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, "0")).join("");
+    if (actualDigest !== headerDigest) throw new Error("ZDLL payload SHA-256 mismatch");
+
+    return { manifest, wasmBytes, sha256: actualDigest };
+  }
+
+  function normalizeLibraryName(value) {
+    return String(value || "").replace(/\\/g, "/").split("/").pop()
+      .replace(/\\.(?:zdll|dll|wasm)$/i, "").toLowerCase();
+  }
+
   function findXapiEntries(manifest) {
     const listed = Array.isArray(manifest.xapi) ? manifest.xapi : [];
     const entries = manifest.entries || [];
@@ -197,7 +257,7 @@ function findZdllEntries(manifest) {
     return out;
   }
 
-  const api = { formatApiLog, verifyImage, formatTrace, GUEST_PATHS, findGuestEntry, findGuestDlls, findZapiEntries, findZdllEntries, findXapiEntries,
+  const api = { formatApiLog, verifyImage, formatTrace, GUEST_PATHS, findGuestEntry, findGuestDlls, findZapiEntries, findZdllEntries, findXapiEntries, decodeZdllContainer, normalizeLibraryName,
                 runtimeKind, fillMissingImports, readXapiTable };
   if (typeof module === "object" && module && module.exports) module.exports = api;
   else root.ZWASMHost = api;

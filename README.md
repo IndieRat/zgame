@@ -31,6 +31,11 @@ An existing browser runtime can be supplied instead:
     python tools/zwasm_build.py "C:\Games\Isaac" --boot "C:\Build\boot.wasm" --image "C:\Build\isaac.segs.bin"
 
 The builder does not convert a Windows .exe into a runnable WASM module. A prepared image/runtime must already exist for the actual game execution layer.
+For the current Isaac Repentance 1.7.9c test directory, the packaging/diagnostic command is:
+
+    python tools/zwasm_build.py "C:\TBOIRG\The Binding of Isaac Rebirth Repentance v1.7.9c"
+
+This builds a package from that directory; it does not by itself translate the retail executable into runnable WebAssembly or guarantee full-game compatibility.
 
 ## Native API frame: .zapi and .zdll
 
@@ -40,7 +45,7 @@ A .zapi manifest maps stable API IDs to a .zdll implementation:
 
     .zapi -> API ID/name/argc -> .zdll -> zdll_call(id, a0, a1, a2, a3)
 
-The browser shell now validates, instantiates, initializes, and registers bundled .zdll modules, then routes .zapi calls into them. .xapi remains accepted by the builder as a compatibility alias and is normalized into the ZWASM .zapi package role.
+The browser shell validates the ZDLLG01 header, manifest, ABI, bounds, and WASM SHA-256 before instantiating bundled .zdll modules. These are WebAssembly modules, not Windows PE DLLs; native game DLLs stay on the separate guest-DLL path. The shell resolves .zapi library names case-insensitively, initializes modules before guest execution, and rebinds guest imports only after the .zapi/.zdll and .xapi manifests are registered. .xapi remains accepted by the builder as a compatibility alias and is normalized into the ZWASM .zapi package role.
 
 A minimal .zapi looks like:
 
