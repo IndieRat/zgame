@@ -1193,7 +1193,8 @@ static uint32_t shim_call(uint32_t idx){
   }
   case SHIM_GetNumaProcessorNode:{uint32_t p=ARG(1);if(p)wr8(p,0);r=1u;break;}
   case SHIM_GetNumaNodeProcessorMask:{
-   uint32_t p=ARG(1);if(p){wr32(p,1u);wr32(p+4u,0);wr16(p+8u,0);wr16(p+10u,0);wr16(p+12u,0);wr16(p+14u,0);}
+   /* The legacy API writes a 64-bit processor mask, not GROUP_AFFINITY. */
+   uint32_t p=ARG(1);if(p){wr32(p,1u);wr32(p+4u,0);}
    r=1u;break;
   }
   case SHIM_CoInitializeEx:case SHIM_CoInitialize:case SHIM_CoUninitialize:r=0u;break;
