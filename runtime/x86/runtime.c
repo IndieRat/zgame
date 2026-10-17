@@ -3914,7 +3914,9 @@ static int x86_dll_initialize_one(uint32_t index){
   * loader. Do not execute TLS callbacks or DllMain against trap-filled IAT
   * slots; retain the mapped image and let diagnostics report the missing
   * imports if the executable later tries to call one of its exports. */
- if(m->imports_failed){
+ if(m->imports_failed&&
+    !x86_dll_cname_equal(m->requested_name,"steam_api.dll")&&
+    !x86_dll_cname_equal(m->name,"steam_api.dll")){
   m->init_state=4u;
   x86_dll_init_skipped_count++;
   return 1;
