@@ -49,6 +49,14 @@ assert.match(runtime, /#define X86_MEM_REGION_MAX 4096u/,
   "guest memory-region metadata must not exhaust during CRT startup allocations");
 assert.match(runtime, /X\(_callnewh,1,0\)/,
   "the CRT new-handler probe must resolve rather than trap");
+assert.match(runtime, /X\(BringWindowToTop,1,1\)/,
+  "common USER32 window calls must resolve through the Win32 shim catalogue");
+assert.match(runtime, /X\(GetProcessTimes,5,1\)/,
+  "the common Kernel32 system query imports must resolve");
+assert.match(runtime, /case SHIM_GetCursorPos/,
+  "cursor position calls must have safe output handling");
+assert.match(runtime, /case SHIM_timeGetDevCaps/,
+  "multimedia capability queries must resolve with a compatible return code");
 assert.match(runtime, /case SHIM_free:x86_crt_free_impl\(ARG\(0\)\);break;/,
   "free must release CRT allocation records");
 assert.match(runtime, /case SHIM_realloc:r=x86_crt_realloc_impl\(ARG\(0\),ARG\(1\)\);break;/,
