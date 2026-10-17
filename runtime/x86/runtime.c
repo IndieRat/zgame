@@ -401,7 +401,10 @@ static void wr8(uint32_t p,uint8_t v);
  * The current instruction core still uses its established little-endian accessors;
  * these APIs establish the common memory contract that future CPU/CRT code can use
  * without exposing raw WASM addresses to guest-facing allocation code. */
-#define X86_MEM_REGION_MAX 64u
+/* Guest allocations, loaded modules, image/stack/TLS, and filesystem buffers all
+ * share this registry. 64 entries exhausted during CRT startup; after that,
+ * malloc returned NULL despite abundant guest address space. */
+#define X86_MEM_REGION_MAX 4096u
 #define X86_MEM_READ  0x01u
 #define X86_MEM_WRITE 0x02u
 #define X86_MEM_EXEC  0x04u
@@ -988,7 +991,11 @@ static uint32_t guest_alloc_raw(uint32_t n){
  X(_initialize_onexit_table,1,0) X(_register_onexit_function,2,0) X(_crt_atexit,1,0) \
  X(_register_thread_local_exe_atexit_callback,1,0) X(_seh_filter_exe,4,0) \
  X(_exit,1,0) X(exit,1,0) X(_cexit,0,0) X(_c_exit,0,0) X(abort,0,0) X(terminate,0,0) \
- X(malloc,1,0) X(free,1,0) X(calloc,2,0) X(memset,3,0) X(memcpy,3,0) X(memmove,3,0) X(strlen,1,0) X(_errno,0,0)
+ X(malloc,1,0) X(free,1,0) X(calloc,2,0) X(realloc,2,0) X(_callnewh,1,0) \
+ X(memset,3,0) X(memcpy,3,0) X(memmove,3,0) X(memcmp,3,0) X(memchr,3,0) \
+ X(strlen,1,0) X(strcmp,2,0) X(strncmp,3,0) X(strchr,2,0) X(strrchr,2,0) \
+ X(strcpy,2,0) X(strncpy,3,0) X(strcat,2,0) X(_strdup,1,0) X(_stricmp,2,0) \
+ X(_strnicmp,3,0) X(strpbrk,2,0) X(tolower,1,0) X(isdigit,1,0) X(ispunct,1,0) X(_errno,0,0)
 enum {
 #define X(n,a,c) SHIM_##n,
  SHIM_LIST(X)
@@ -1272,11 +1279,82 @@ static uint32_t shim_call(uint32_t idx){
    halted=1;
    break;
   case SHIM_malloc:r=x86_crt_malloc_impl(ARG(0));break;
-  case SHIM_free:break;
-  case SHIM_calloc:{uint32_t n=ARG(0)*ARG(1);r=x86_crt_malloc_impl(n);if(r)for(uint32_t i=0;i<n;i++)wr8(r+i,0);break;}
+  case SHIM_free:x86_crt_free_impl(ARG(0));break;
+  case SHIM_calloc:{
+   uint32_t count=ARG(0),size=ARG(1);
+   if(count&&size<=0xFFFFFFFFu/count){
+    uint32_t n=count*size;r=x86_crt_malloc_impl(n);
+    if(r)for(uint32_t i=0;i<n;i++)wr8(r+i,0);
+   }
+   break;
+  }
+  case SHIM_realloc:r=x86_crt_realloc_impl(ARG(0),ARG(1));break;
+  case SHIM__callnewh:r=0;break; /* no guest new-handler is registered */
   case SHIM_memset:{uint32_t d=ARG(0),n=ARG(2);uint8_t v=(uint8_t)ARG(1);for(uint32_t i=0;i<n;i++)wr8(d+i,v);r=d;break;}
-  case SHIM_memcpy:case SHIM_memmove:{uint32_t d=ARG(0),s=ARG(1),n=ARG(2);if(d<=s||d>=s+n){for(uint32_t i=0;i<n;i++)wr8(d+i,MEM8(s+i));}else{for(uint32_t i=n;i>0;i--)wr8(d+i-1u,MEM8(s+i-1u));}r=d;break;}
+  case SHIM_memcpy:case SHIM_memmove:{
+   uint32_t d=ARG(0),s=ARG(1),n=ARG(2);
+   if(d<=s||d>=s+n){for(uint32_t i=0;i<n;i++)wr8(d+i,MEM8(s+i));}
+   else{for(uint32_t i=n;i>0;i--)wr8(d+i-1u,MEM8(s+i-1u));}
+   r=d;break;
+  }
+  case SHIM_memcmp:{
+   uint32_t a=ARG(0),b=ARG(1),n=ARG(2);r=0;
+   for(uint32_t i=0;i<n;i++){uint32_t x=MEM8(a+i),y=MEM8(b+i);if(x!=y){r=(uint32_t)((int32_t)x-(int32_t)y);break;}}
+   break;
+  }
+  case SHIM_memchr:{
+   uint32_t p=ARG(0),ch=ARG(1)&255u,n=ARG(2);
+   for(uint32_t i=0;i<n;i++)if(MEM8(p+i)==ch){r=p+i;break;}
+   break;
+  }
   case SHIM_strlen:{uint32_t p=ARG(0),n=0;while(MEM8(p+n))n++;r=n;break;}
+  case SHIM_strcmp:case SHIM__stricmp:{
+   uint32_t a=ARG(0),b=ARG(1),i=0;
+   for(;;i++){uint32_t x=MEM8(a+i),y=MEM8(b+i);
+    if(idx==SHIM__stricmp){if(x>='A'&&x<='Z')x+=32u;if(y>='A'&&y<='Z')y+=32u;}
+    if(x!=y){r=(uint32_t)((int32_t)x-(int32_t)y);break;}if(!x){r=0;break;}
+   }break;
+  }
+  case SHIM_strncmp:case SHIM__strnicmp:{
+   uint32_t a=ARG(0),b=ARG(1),n=ARG(2);r=0;
+   for(uint32_t i=0;i<n;i++){uint32_t x=MEM8(a+i),y=MEM8(b+i);
+    if(idx==SHIM__strnicmp){if(x>='A'&&x<='Z')x+=32u;if(y>='A'&&y<='Z')y+=32u;}
+    if(x!=y){r=(uint32_t)((int32_t)x-(int32_t)y);break;}if(!x)break;
+   }break;
+  }
+  case SHIM_strchr:case SHIM_strrchr:{
+   uint32_t p=ARG(0),ch=ARG(1)&255u;
+   if(idx==SHIM_strchr){for(uint32_t i=0;i<0x100000u;i++){uint32_t v=MEM8(p+i);if(v==ch){r=p+i;break;}if(!v)break;}}
+   else{uint32_t last=0;for(uint32_t i=0;i<0x100000u;i++){uint32_t v=MEM8(p+i);if(v==ch)last=p+i;if(!v)break;}r=last;}
+   break;
+  }
+  case SHIM_strcpy:case SHIM__strdup:{
+   uint32_t d=ARG(0),s=ARG(1),i=0;
+   if(idx==SHIM__strdup){s=ARG(0);uint32_t n=0;while(MEM8(s+n))n++;d=x86_crt_malloc_impl(n+1u);if(!d)break;}
+   for(;i<0x100000u;i++){uint8_t v=MEM8(s+i);wr8(d+i,v);if(!v)break;}r=d;break;
+  }
+  case SHIM_strncpy:{
+   uint32_t d=ARG(0),s=ARG(1),n=ARG(2),i=0;
+   for(;i<n&&i<0x100000u;i++){uint8_t v=MEM8(s+i);wr8(d+i,v);if(!v){i++;break;}}
+   for(;i<n&&i<0x100000u;i++)wr8(d+i,0);
+   r=d;break;
+  }
+  case SHIM_strcat:{
+   uint32_t d=ARG(0),s=ARG(1),i=0,j=0;
+   while(i<0x100000u&&MEM8(d+i))i++;
+   for(;i<0x100000u&&j<0x100000u;j++,i++){uint8_t v=MEM8(s+j);wr8(d+i,v);if(!v)break;}
+   r=d;break;
+  }
+  case SHIM_strpbrk:{
+   uint32_t s=ARG(0),accept=ARG(1);
+   for(uint32_t i=0;i<0x100000u&&MEM8(s+i);i++){
+    for(uint32_t j=0;j<0x10000u&&MEM8(accept+j);j++)if(MEM8(s+i)==MEM8(accept+j)){r=s+i;break;}
+    if(r)break;
+   }break;
+  }
+  case SHIM_tolower:{uint32_t v=ARG(0);r=(v>='A'&&v<='Z')?v+32u:v;break;}
+  case SHIM_isdigit:{uint32_t v=ARG(0);r=(v>='0'&&v<='9')?1u:0u;break;}
+  case SHIM_ispunct:{uint32_t v=ARG(0);r=((v>=0x21u&&v<=0x2Fu)||(v>=0x3Au&&v<=0x40u)||(v>=0x5Bu&&v<=0x60u)||(v>=0x7Bu&&v<=0x7Eu))?1u:0u;break;}
   default:break; /* everything else: success/0, args popped per table */
  }
  #undef ARG
@@ -3315,7 +3393,16 @@ static uint32_t x86_dll_get_proc(uint32_t module,uint32_t name){
 }
 static uint32_t x86_dll_resolve_import(uint32_t dll,uint32_t name){
  uint32_t t=resolve_builtin(dll,name);if(t)return t;
- for(uint32_t i=0;i<X86_DLL_MAX_MODULES;i++)if(x86_dll_modules[i].active&&x86_dll_name_equal(dll,x86_dll_modules[i].name)){t=x86_dll_get_proc(x86_dll_modules[i].base,name);if(t)return t;}
+ for(uint32_t i=0;i<X86_DLL_MAX_MODULES;i++){
+  x86_dll_module_t *m=&x86_dll_modules[i];
+  if(!m->active)continue;
+  /* The image's internal export name can differ from the DLL filename
+   * imported by the caller (notably versioned Lua DLLs). Match both. */
+  if(x86_dll_name_equal(dll,m->name)||x86_dll_name_equal(dll,m->requested_name)){
+   t=x86_dll_get_proc(m->base,name);
+   if(t)return t;
+  }
+ }
  return 0;
 }
 static int x86_gdr_rebind_slot(uint32_t slot){
