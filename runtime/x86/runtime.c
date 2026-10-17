@@ -3874,7 +3874,7 @@ static int x86_dll_initialize_one(uint32_t index){
     if(!sh||(rd32(sh+36u)&0x20000000u)==0u){
      x86_dll_init_fail_module=index;x86_dll_init_fail_stage=2u;x86_dll_init_fail_target=cb;x86_dll_init_fail_eip=cb;x86_dll_init_fail_error=0xD128u;m->init_state=3u;return 0;
     }
-    if(!x86_dll_invoke_init_target(cb,m->base,1u,0u,0u)){
+    if(!x86_dll_invoke_init_target(cb,m->base,1u,0u,0u,0)){
      x86_dll_init_fail_module=index;x86_dll_init_fail_stage=2u;m->init_state=3u;return 0;
     }
    }
