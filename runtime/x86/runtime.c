@@ -3680,6 +3680,57 @@ __attribute__((export_name("x86_dll_get_last_error"))) uint32_t x86_dll_get_last
 __attribute__((export_name("x86_dll_get_count"))) uint32_t x86_dll_get_count(void){uint32_t n=0;for(uint32_t i=0;i<X86_DLL_MAX_MODULES;i++)if(x86_dll_modules[i].active)n++;return n;}
 __attribute__((export_name("x86_dll_get_base"))) uint32_t x86_dll_get_base(uint32_t index){uint32_t n=0;for(uint32_t i=0;i<X86_DLL_MAX_MODULES;i++)if(x86_dll_modules[i].active){if(n++==index)return x86_dll_modules[i].base;}return 0;}
 __attribute__((export_name("x86_dll_get_size"))) uint32_t x86_dll_get_size(uint32_t index){uint32_t n=0;for(uint32_t i=0;i<X86_DLL_MAX_MODULES;i++)if(x86_dll_modules[i].active){if(n++==index)return x86_dll_modules[i].size;}return 0;}
+/* Address-to-PE-section diagnostics. Used to distinguish genuine DLL code
+ * targets from indirect branches into mapped data/zero-fill during guest faults. */
+static uint32_t x86_pe_section_header_for_base(uint32_t base,uint32_t size,uint32_t address){
+ if(address<base||address-base>=size||size<0x40u)return 0u;
+ uint32_t pe=rd32(base+0x3Cu);
+ if(pe>size||size-pe<24u||rd32(base+pe)!=0x4550u)return 0u;
+ uint16_t nsec=rd16(base+pe+6u),optsz=rd16(base+pe+20u);
+ uint32_t sh=pe+24u+(uint32_t)optsz;
+ if(sh>size||(uint64_t)nsec*40u>(uint64_t)(size-sh))return 0u;
+ uint32_t rva=address-base;
+ for(uint16_t i=0;i<nsec;i++,sh+=40u){
+  uint32_t va=rd32(base+sh+12u),vsz=rd32(base+sh+8u),rawsz=rd32(base+sh+16u);
+  uint32_t span=vsz>rawsz?vsz:rawsz;
+  if(rva>=va&&rva-va<span)return base+sh;
+ }
+ return 0u;
+}
+static uint32_t x86_pe_section_header_for_address(uint32_t address){
+ if(image_base&&image_size){uint32_t sh=x86_pe_section_header_for_base(image_base,image_size,address);if(sh)return sh;}
+ for(uint32_t i=0;i<X86_DLL_MAX_MODULES;i++){
+  x86_dll_module_t*m=&x86_dll_modules[i];
+  if(m->active&&address>=m->base&&address-m->base<m->size){
+   uint32_t sh=x86_pe_section_header_for_base(m->base,m->size,address);
+   if(sh)return sh;
+  }
+ }
+ return 0u;
+}
+__attribute__((export_name("x86_dll_get_name_byte"))) uint32_t x86_dll_get_name_byte(uint32_t index,uint32_t j){
+ if(j>=sizeof(x86_dll_modules[0].requested_name))return 0u;
+ uint32_t n=0;
+ for(uint32_t i=0;i<X86_DLL_MAX_MODULES;i++)if(x86_dll_modules[i].active){
+  if(n++==index)return (uint8_t)x86_dll_modules[i].requested_name[j];
+ }
+ return 0u;
+}
+/* field: 0=section RVA, 1=section mapped span, 2=IMAGE_SCN_MEM_* flags.
+ * Return 0xFFFFFFFF when the address does not fall inside a PE section. */
+__attribute__((export_name("x86_get_section_info_for_address"))) uint32_t x86_get_section_info_for_address(uint32_t address,uint32_t field){
+ uint32_t sh=x86_pe_section_header_for_address(address);
+ if(!sh)return 0xFFFFFFFFu;
+ if(field==0u)return rd32(sh+12u);
+ if(field==1u){uint32_t vsz=rd32(sh+8u),raw=rd32(sh+16u);return vsz>raw?vsz:raw;}
+ if(field==2u)return rd32(sh+36u);
+ return 0xFFFFFFFFu;
+}
+__attribute__((export_name("x86_get_section_name_byte_for_address"))) uint32_t x86_get_section_name_byte_for_address(uint32_t address,uint32_t j){
+ if(j>=8u)return 0u;
+ uint32_t sh=x86_pe_section_header_for_address(address);
+ return sh?MEM8(sh+j):0u;
+}
 __attribute__((export_name("x86_dll_get_entry"))) uint32_t x86_dll_get_entry(uint32_t index){uint32_t n=0;for(uint32_t i=0;i<X86_DLL_MAX_MODULES;i++)if(x86_dll_modules[i].active){if(n++==index)return x86_dll_modules[i].base+x86_dll_modules[i].entry;}return 0;}
 __attribute__((export_name("x86_dll_get_import_failed"))) uint32_t x86_dll_get_import_failed(uint32_t index){uint32_t n=0;for(uint32_t i=0;i<X86_DLL_MAX_MODULES;i++)if(x86_dll_modules[i].active){if(n++==index)return x86_dll_modules[i].imports_failed;}return 0;}
 
