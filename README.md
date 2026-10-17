@@ -37,6 +37,12 @@ For the current Isaac Repentance 1.7.9c test directory, the packaging/diagnostic
 
 This builds a package from that directory; it does not by itself translate the retail executable into runnable WebAssembly or guarantee full-game compatibility.
 
+For a reproducible diagnostic build on this machine, run:
+
+    tools\\build_isaac_179c.bat
+
+The script writes the package to `dist/isaac-repentance-1.7.9c.zgame` and keeps generated runtime/image files under `.build/isaac-repentance-1.7.9c`, outside the game installation. Native Windows `.dll` files are packaged as guest DLLs; `.zdll` is reserved for the validated WebAssembly bridge-container format.
+
 ## Native API frame: .zapi and .zdll
 
 ZWASM has its own native API vocabulary; it does not require XWASM's .xapi format. The stable frame is zworld.v1 with a fixed i32x5 call shape: API ID, up to four 32-bit arguments, and one 32-bit return value.
