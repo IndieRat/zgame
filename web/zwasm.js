@@ -532,6 +532,21 @@ class GuestRuntime {
         }
         const stage = ex.x86_dll_get_init_fail_stage?.() ?? 0;
         const stageName = ({1:"TLS setup",2:"DLL TLS callback",3:"DllMain",4:"EXE TLS callback"})[stage] ?? "unknown initialization stage";
+        const readInitFailText = (fn) => {
+          let value = "";
+          if (!ex[fn]) return value;
+          for (let j = 0; j < 127; j++) {
+            const ch = ex[fn](j);
+            if (!ch) break;
+            value += String.fromCharCode(ch);
+          }
+          return value;
+        };
+        const failedImportDll = readInitFailText("x86_dll_get_init_fail_import_dll_byte");
+        const failedImportFunc = readInitFailText("x86_dll_get_init_fail_import_func_byte");
+        if (failedImportDll || failedImportFunc) {
+          log("native DLL initializer trapped on unresolved import: " + (failedImportDll || "?") + "!" + (failedImportFunc || "?"));
+        }
         log("native DLL initialization FAILED module=" + (moduleName || "<executable>") +
             " stage=" + stageName + " target=" + hex(ex.x86_dll_get_init_fail_target?.() ?? 0) +
             " eip=" + hex(ex.x86_dll_get_init_fail_eip?.() ?? 0) +
@@ -630,6 +645,21 @@ class GuestRuntime {
           " stage=" + stage + " target=" + hex(ex.x86_dll_get_init_fail_target?.() ?? 0) +
           " eip=" + hex(ex.x86_dll_get_init_fail_eip?.() ?? 0) +
           " error=" + hex(ex.x86_dll_get_init_fail_error?.() ?? 0));
+      const readInitFailText = (fn) => {
+        let value = "";
+        if (!ex[fn]) return value;
+        for (let j = 0; j < 127; j++) {
+          const ch = ex[fn](j);
+          if (!ch) break;
+          value += String.fromCharCode(ch);
+        }
+        return value;
+      };
+      const failedImportDll = readInitFailText("x86_dll_get_init_fail_import_dll_byte");
+      const failedImportFunc = readInitFailText("x86_dll_get_init_fail_import_func_byte");
+      if (failedImportDll || failedImportFunc) {
+        log("diag: native DLL initializer unresolved import " + (failedImportDll || "?") + "!" + (failedImportFunc || "?"));
+      }
       describeAddress("dll-init-target", ex.x86_dll_get_init_fail_target?.() ?? 0);
       describeAddress("dll-init-fault-eip", ex.x86_dll_get_init_fail_eip?.() ?? 0);
     }
