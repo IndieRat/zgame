@@ -3397,6 +3397,18 @@ typedef struct{uint32_t active,data,size;char name[96];}x86_dll_resource_t;
 static x86_dll_module_t x86_dll_modules[X86_DLL_MAX_MODULES];
 static x86_dll_resource_t x86_dll_resources[X86_DLL_MAX_RESOURCES];
 static uint32_t x86_dll_last_error=0,x86_dll_last_base=0;
+/* Native PE DLLs can contain TLS-based unpacking stubs (the shipped Steam
+ * client API uses WUS0/WUS1 sections). Windows runs TLS callbacks and DllMain
+ * before an imported function is callable; the guest loader must do likewise. */
+#define X86_DLL_INIT_SENTINEL 0xF00DD11Au
+#define X86_DLL_INIT_STEP_LIMIT 5000000u
+static uint32_t x86_dll_init_count=0;
+static uint32_t x86_dll_init_fail_module=0xFFFFFFFFu;
+static uint32_t x86_dll_init_fail_stage=0;
+static uint32_t x86_dll_init_fail_target=0;
+static uint32_t x86_dll_init_fail_eip=0;
+static uint32_t x86_dll_init_fail_error=0;
+static uint32_t x86_dll_tls_next_index=1u;
 static int x86_dll_cname_equal(const char*a,const char*b){uint32_t i=0;if(!a||!b)return 0;while(a[i]&&b[i]){char x=a[i],y=b[i];if(x>='A'&&x<='Z')x=(char)(x-'A'+'a');if(y>='A'&&y<='Z')y=(char)(y-'A'+'a');if(x!=y)return 0;i++;}return a[i]==0&&b[i]==0;}
 static int x86_dll_name_equal(uint32_t p,const char*n){uint32_t i=0;if(!p||!n)return 0;while(n[i]){char a=(char)MEM8(p+i),b=n[i];if(a>='A'&&a<='Z')a=(char)(a-'A'+'a');if(b>='A'&&b<='Z')b=(char)(b-'A'+'a');if(a!=b)return 0;i++;}return MEM8(p+i)==0;}
 static uint32_t x86_dll_basename_ptr(uint32_t p){uint32_t last=p;if(!p)return 0;for(uint32_t i=0;i<256u&&MEM8(p+i);i++)if(MEM8(p+i)=='/'||MEM8(p+i)=='\\')last=p+i+1u;return last;}
@@ -3737,6 +3749,183 @@ __attribute__((export_name("x86_get_section_name_byte_for_address"))) uint32_t x
  uint32_t sh=x86_pe_section_header_for_address(address);
  return sh?MEM8(sh+j):0u;
 }
+/* Execute a guest DLL/TLS callback using a private synthetic stdcall frame.
+ * All machine state is restored afterwards so bootstrap code cannot become the
+ * game's initial register state or pollute its instruction trace. */
+static int x86_dll_invoke_init_target(uint32_t target,uint32_t a0,uint32_t a1,uint32_t a2,uint32_t require_true,uint32_t *return_value){
+ uint32_t saved_regs[8],saved_eflags=eflags,saved_eip=eip,saved_halted=halted,saved_error=cpu_error,saved_steps=steps;
+ uint32_t saved_prefixes=decoded_prefixes,saved_operand16=decoded_operand16;
+ uint32_t saved_control_kind=x86_control_fault_kind,saved_control_eip=x86_control_fault_eip;
+ uint32_t saved_control_next=x86_control_fault_next_eip,saved_control_target=x86_control_fault_target,saved_control_slot=x86_control_fault_slot;
+ if(return_value)*return_value=0;
+ if(!target||!x86_mem_region_find(target,1u,X86_MEM_EXEC)){
+  x86_dll_init_fail_target=target;x86_dll_init_fail_eip=target;x86_dll_init_fail_error=0xD11B;
+  return 0;
+ }
+ for(uint32_t i=0;i<8u;i++)saved_regs[i]=regs[i];
+ uint32_t sp=X86_STACK_TOP-16u;
+ if(!x86_mem_region_find(sp,16u,X86_MEM_WRITE)){
+  x86_dll_init_fail_target=target;x86_dll_init_fail_eip=target;x86_dll_init_fail_error=0xD11C;
+  return 0;
+ }
+ wr32(sp,X86_DLL_INIT_SENTINEL);wr32(sp+4u,a0);wr32(sp+8u,a1);wr32(sp+12u,a2);
+ for(uint32_t i=0;i<8u;i++)regs[i]=0u;
+ regs[R_ESP]=sp;
+ eflags=0x202u;decoded_prefixes=0u;decoded_operand16=0u;
+ eip=target;halted=0u;cpu_error=0u;
+ uint32_t returned=0u;
+ for(uint32_t i=0;i<X86_DLL_INIT_STEP_LIMIT;i++){
+  if(eip==X86_DLL_INIT_SENTINEL){returned=1u;break;}
+  if(halted||cpu_error)break;
+  int rc=cpu_step();
+  if(rc<0)break;
+  if(cpu_error>=0xE100u)break;
+ }
+ uint32_t value=regs[R_EAX],fail_ip=eip,fail_error=cpu_error;
+ if(!returned&&!fail_error)fail_error=0xD11Au; /* initializer exceeded its bounded step budget */
+ if(return_value)*return_value=value;
+ for(uint32_t i=0;i<8u;i++)regs[i]=saved_regs[i];
+ eflags=saved_eflags;eip=saved_eip;halted=saved_halted;cpu_error=saved_error;steps=saved_steps;
+ decoded_prefixes=(uint8_t)saved_prefixes;decoded_operand16=(uint8_t)saved_operand16;
+ /* Bootstrap call/return traffic is not part of the game's call history. */
+ x86_trace_reset();x86_profile_clear();espw_prev=0;
+ if(!returned||fail_error||(require_true&&value==0u)){
+  x86_dll_init_fail_target=target;x86_dll_init_fail_eip=fail_ip;x86_dll_init_fail_error=fail_error?fail_error:0xD11Du;
+  x86_control_fault_kind=saved_control_kind;x86_control_fault_eip=saved_control_eip;
+  x86_control_fault_next_eip=saved_control_next;x86_control_fault_target=saved_control_target;x86_control_fault_slot=saved_control_slot;
+  return 0;
+ }
+ return 1;
+}
+static int x86_dll_prepare_tls(uint32_t index){
+ x86_dll_module_t*m=&x86_dll_modules[index];
+ if(!m->tls_rva||m->tls_rva+24u<m->tls_rva||m->tls_rva+24u>m->size)return 1;
+ uint32_t d=m->base+m->tls_rva;
+ uint32_t start=rd32(d),end=rd32(d+4u),index_addr=rd32(d+8u),callbacks=rd32(d+12u),zero=rd32(d+16u);
+ if(end<start){x86_dll_init_fail_target=d;x86_dll_init_fail_eip=d;x86_dll_init_fail_error=0xD120u;return 0;}
+ uint32_t template_size=end-start,total=template_size+zero;
+ if(total<template_size||total>0x1000000u){x86_dll_init_fail_target=d;x86_dll_init_fail_eip=d;x86_dll_init_fail_error=0xD121u;return 0;}
+ if(template_size&&!x86_mem_region_find(start,template_size,X86_MEM_READ)){x86_dll_init_fail_target=start;x86_dll_init_fail_eip=start;x86_dll_init_fail_error=0xD122u;return 0;}
+ if(index_addr&&!x86_mem_region_find(index_addr,4u,X86_MEM_WRITE)){x86_dll_init_fail_target=index_addr;x86_dll_init_fail_eip=index_addr;x86_dll_init_fail_error=0xD123u;return 0;}
+ uint32_t array=rd32(X86_FS_TEB_BASE+0x2Cu);
+ if(!array||!x86_mem_region_find(array,0x1000u,X86_MEM_WRITE)){
+  array=x86_mem_alloc_region(0x1000u,X86_MEM_READ|X86_MEM_WRITE,10u);
+  if(!array){x86_dll_init_fail_target=d;x86_dll_init_fail_eip=d;x86_dll_init_fail_error=0xD124u;return 0;}
+  for(uint32_t i=0;i<0x1000u;i++)wr8(array+i,0u);
+  wr32(X86_FS_TEB_BASE+0x2Cu,array);
+ }
+ if(x86_dll_tls_next_index>=0x400u){x86_dll_init_fail_target=d;x86_dll_init_fail_eip=d;x86_dll_init_fail_error=0xD125u;return 0;}
+ uint32_t block=x86_mem_alloc_region(((total?total:1u)+0xFFFu)&~0xFFFu,X86_MEM_READ|X86_MEM_WRITE,10u);
+ if(!block){x86_dll_init_fail_target=d;x86_dll_init_fail_eip=d;x86_dll_init_fail_error=0xD126u;return 0;}
+ for(uint32_t i=0;i<total;i++)wr8(block+i,0u);
+ for(uint32_t i=0;i<template_size;i++)wr8(block+i,MEM8(start+i));
+ uint32_t ti=x86_dll_tls_next_index++;
+ if(index_addr)wr32(index_addr,ti);
+ wr32(array+ti*4u,block);
+ m->tls_index=ti;m->tls_block=block;
+ (void)callbacks;
+ return 1;
+}
+static int x86_dll_initialize_one(uint32_t index);
+static int x86_dll_initialize_dependencies(uint32_t index){
+ x86_dll_module_t*m=&x86_dll_modules[index];
+ if(!m->import_rva||!m->import_size||m->import_rva>m->size||m->import_size>m->size-m->import_rva)return 1;
+ uint32_t p=m->base+m->import_rva,end=p+m->import_size;
+ for(uint32_t d=0;p+20u<=end&&d<256u;d++,p+=20u){
+  uint32_t oft=rd32(p),name_rva=rd32(p+12u),ft=rd32(p+16u);
+  if(!oft&&!name_rva&&!ft)break;
+  if(!name_rva||name_rva>=m->size)continue;
+  uint32_t name=m->base+name_rva;
+  for(uint32_t j=0;j<X86_DLL_MAX_MODULES;j++){
+   x86_dll_module_t*dep=&x86_dll_modules[j];
+   if(!dep->active||j==index)continue;
+   if(x86_dll_name_equal(name,dep->requested_name)||x86_dll_name_equal(name,dep->name)){
+    if(!x86_dll_initialize_one(j))return 0;
+    break;
+   }
+  }
+ }
+ return 1;
+}
+static int x86_dll_initialize_one(uint32_t index){
+ if(index>=X86_DLL_MAX_MODULES||!x86_dll_modules[index].active)return 1;
+ x86_dll_module_t*m=&x86_dll_modules[index];
+ if(m->init_state==2u)return 1;
+ if(m->init_state==1u)return 1; /* circular import dependency */
+ if(m->init_state==3u)return 0;
+ m->init_state=1u;
+ if(!x86_dll_initialize_dependencies(index)){
+  if(x86_dll_init_fail_module==0xFFFFFFFFu)x86_dll_init_fail_module=index;
+  m->init_state=3u;return 0;
+ }
+ if(!x86_dll_prepare_tls(index)){
+  x86_dll_init_fail_module=index;x86_dll_init_fail_stage=1u;m->init_state=3u;return 0;
+ }
+ if(m->tls_rva&&m->tls_rva+24u>=m->tls_rva&&m->tls_rva+24u<=m->size){
+  uint32_t d=m->base+m->tls_rva,callbacks=rd32(d+12u);
+  if(callbacks){
+   for(uint32_t j=0;j<128u;j++){
+    if(!x86_mem_region_find(callbacks+j*4u,4u,X86_MEM_READ)){
+     x86_dll_init_fail_module=index;x86_dll_init_fail_stage=2u;x86_dll_init_fail_target=callbacks+j*4u;x86_dll_init_fail_eip=callbacks+j*4u;x86_dll_init_fail_error=0xD127u;m->init_state=3u;return 0;
+    }
+    uint32_t cb=rd32(callbacks+j*4u);
+    if(!cb)break;
+    uint32_t sh=x86_pe_section_header_for_address(cb);
+    if(!sh||(rd32(sh+36u)&0x20000000u)==0u){
+     x86_dll_init_fail_module=index;x86_dll_init_fail_stage=2u;x86_dll_init_fail_target=cb;x86_dll_init_fail_eip=cb;x86_dll_init_fail_error=0xD128u;m->init_state=3u;return 0;
+    }
+    if(!x86_dll_invoke_init_target(cb,m->base,1u,0u,0u)){
+     x86_dll_init_fail_module=index;x86_dll_init_fail_stage=2u;m->init_state=3u;return 0;
+    }
+   }
+  }
+ }
+ if(m->entry){
+  if(m->entry>=m->size){
+   x86_dll_init_fail_module=index;x86_dll_init_fail_stage=3u;x86_dll_init_fail_target=m->base+m->entry;x86_dll_init_fail_eip=m->base+m->entry;x86_dll_init_fail_error=0xD129u;m->init_state=3u;return 0;
+  }
+  uint32_t target=m->base+m->entry,sh=x86_pe_section_header_for_address(target);
+  if(!sh||(rd32(sh+36u)&0x20000000u)==0u){
+   x86_dll_init_fail_module=index;x86_dll_init_fail_stage=3u;x86_dll_init_fail_target=target;x86_dll_init_fail_eip=target;x86_dll_init_fail_error=0xD12Au;m->init_state=3u;return 0;
+  }
+  if(!x86_dll_invoke_init_target(target,m->base,1u,0u,1u,0)){
+   x86_dll_init_fail_module=index;x86_dll_init_fail_stage=3u;m->init_state=3u;return 0;
+  }
+ }
+ m->init_state=2u;x86_dll_init_count++;return 1;
+}
+__attribute__((export_name("x86_dll_initialize_all"))) int32_t x86_dll_initialize_all(void){
+ x86_dll_init_count=0;x86_dll_init_fail_module=0xFFFFFFFFu;x86_dll_init_fail_stage=0u;
+ x86_dll_init_fail_target=0u;x86_dll_init_fail_eip=0u;x86_dll_init_fail_error=0u;x86_dll_tls_next_index=1u;
+ for(uint32_t i=0;i<X86_DLL_MAX_MODULES;i++)if(x86_dll_modules[i].active)x86_dll_modules[i].init_state=0u;
+ for(uint32_t i=0;i<X86_DLL_MAX_MODULES;i++)if(x86_dll_modules[i].active&&!x86_dll_initialize_one(i))return -1;
+ if(tls_callbacks_va){
+  for(uint32_t j=0;j<128u;j++){
+   if(!x86_mem_region_find(tls_callbacks_va+j*4u,4u,X86_MEM_READ)){
+    x86_dll_init_fail_module=0xFFFFFFFFu;x86_dll_init_fail_stage=4u;x86_dll_init_fail_target=tls_callbacks_va+j*4u;x86_dll_init_fail_eip=tls_callbacks_va+j*4u;x86_dll_init_fail_error=0xD12Bu;return -1;
+   }
+   uint32_t cb=rd32(tls_callbacks_va+j*4u);
+   if(!cb)break;
+   uint32_t sh=x86_pe_section_header_for_address(cb);
+   if(!sh||(rd32(sh+36u)&0x20000000u)==0u){
+    x86_dll_init_fail_module=0xFFFFFFFFu;x86_dll_init_fail_stage=4u;x86_dll_init_fail_target=cb;x86_dll_init_fail_eip=cb;x86_dll_init_fail_error=0xD12Cu;return -1;
+   }
+   if(!x86_dll_invoke_init_target(cb,image_base,1u,0u,0u,0u)){
+    x86_dll_init_fail_module=0xFFFFFFFFu;x86_dll_init_fail_stage=4u;return -1;
+   }
+  }
+ }
+ x86_control_fault_kind=0u;x86_control_fault_eip=0u;x86_control_fault_next_eip=0u;
+ x86_control_fault_target=0u;x86_control_fault_slot=0u;
+ return (int32_t)x86_dll_init_count;
+}
+__attribute__((export_name("x86_dll_get_init_count"))) uint32_t x86_dll_get_init_count(void){return x86_dll_init_count;}
+__attribute__((export_name("x86_dll_get_init_fail_module"))) uint32_t x86_dll_get_init_fail_module(void){return x86_dll_init_fail_module;}
+__attribute__((export_name("x86_dll_get_init_fail_stage"))) uint32_t x86_dll_get_init_fail_stage(void){return x86_dll_init_fail_stage;}
+__attribute__((export_name("x86_dll_get_init_fail_target"))) uint32_t x86_dll_get_init_fail_target(void){return x86_dll_init_fail_target;}
+__attribute__((export_name("x86_dll_get_init_fail_eip"))) uint32_t x86_dll_get_init_fail_eip(void){return x86_dll_init_fail_eip;}
+__attribute__((export_name("x86_dll_get_init_fail_error"))) uint32_t x86_dll_get_init_fail_error(void){return x86_dll_init_fail_error;}
+
 __attribute__((export_name("x86_dll_get_entry"))) uint32_t x86_dll_get_entry(uint32_t index){uint32_t n=0;for(uint32_t i=0;i<X86_DLL_MAX_MODULES;i++)if(x86_dll_modules[i].active){if(n++==index)return x86_dll_modules[i].base+x86_dll_modules[i].entry;}return 0;}
 __attribute__((export_name("x86_dll_get_import_failed"))) uint32_t x86_dll_get_import_failed(uint32_t index){uint32_t n=0;for(uint32_t i=0;i<X86_DLL_MAX_MODULES;i++)if(x86_dll_modules[i].active){if(n++==index)return x86_dll_modules[i].imports_failed;}return 0;}
 
