@@ -84,6 +84,11 @@ def main() -> int:
     p.add_argument("-o", "--output", type=Path)
 
     p.add_argument("--clang")
+    p.add_argument(
+        "--work-dir",
+        type=Path,
+        help="directory for generated runtime and image files (default: <game>/.zwasm)",
+    )
     p.add_argument("--boot", type=Path, help="explicit browser/runtime WASM module")
     p.add_argument("--runtime", type=Path, help="explicit external runtime.wasm")
 
@@ -133,8 +138,8 @@ def main() -> int:
     if not root.is_dir():
         raise RuntimeError("input is not a directory: " + str(root))
 
-    generated = root / ".zwasm"
-    generated.mkdir(exist_ok=True)
+    generated = args.work_dir.resolve() if args.work_dir else root / ".zwasm"
+    generated.mkdir(parents=True, exist_ok=True)
 
     clang = find_clang(args.clang)
 
