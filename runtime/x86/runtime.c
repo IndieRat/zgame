@@ -3408,6 +3408,61 @@ static uint32_t x86_dll_init_fail_stage=0;
 static uint32_t x86_dll_init_fail_target=0;
 static uint32_t x86_dll_init_fail_eip=0;
 static uint32_t x86_dll_init_fail_error=0;
+static char x86_dll_init_fail_import_dll[96],x86_dll_init_fail_import_func[128];
+static void x86_dll_init_copy_guest_string(char *out,uint32_t cap,uint32_t address,uint32_t max_read){
+ if(!out||cap==0u)return;
+ uint32_t i=0;
+ if(address){
+  for(;i+1u<cap&&i<max_read&&MEM8(address+i);i++)out[i]=(char)MEM8(address+i);
+ }
+ out[i]=0;
+}
+static void x86_dll_init_copy_ordinal(uint32_t ordinal){
+ static const char digits[]="0123456789";
+ char reverse[16];uint32_t n=0;
+ do{reverse[n++]=digits[ordinal%10u];ordinal/=10u;}while(ordinal&&n<sizeof(reverse));
+ uint32_t k=0;x86_dll_init_fail_import_func[k++]='#';
+ while(n&&k+1u<sizeof(x86_dll_init_fail_import_func))x86_dll_init_fail_import_func[k++]=reverse[--n];
+ x86_dll_init_fail_import_func[k]=0;
+}
+/* Resolve an unresolved IAT slot back to its original import descriptor so
+ * initializer failures report the exact library and symbol instead of only
+ * the trap address. */
+static void x86_dll_init_capture_import_for_slot(uint32_t slot){
+ x86_dll_init_fail_import_dll[0]=0;x86_dll_init_fail_import_func[0]=0;
+ uint32_t base=0,size=0,ir=0,isz=0;
+ if(slot>=image_base&&slot-image_base<image_size){
+  base=image_base;size=image_size;ir=import_rva;isz=import_size;
+ }else{
+  for(uint32_t i=0;i<X86_DLL_MAX_MODULES;i++){
+   x86_dll_module_t*m=&x86_dll_modules[i];
+   if(m->active&&slot>=m->base&&slot-m->base<m->size){
+    base=m->base;size=m->size;ir=m->import_rva;isz=m->import_size;break;
+   }
+  }
+ }
+ if(!base||!ir||!isz||ir>size||isz>size-ir)return;
+ uint32_t p=base+ir,end=p+isz;
+ for(uint32_t d=0;p+20u<=end&&d<256u;d++,p+=20u){
+  uint32_t oft=rd32(p),name_rva=rd32(p+12u),ft=rd32(p+16u);
+  if(!oft&&!name_rva&&!ft)break;
+  if(!name_rva||name_rva>=size||!ft||ft>=size)continue;
+  uint32_t thunk=base+(oft?oft:ft);
+  x86_dll_init_copy_guest_string(x86_dll_init_fail_import_dll,sizeof(x86_dll_init_fail_import_dll),base+name_rva,95u);
+  int descriptor_match=0;
+  for(uint32_t j=0;j<0x100000u&&ft+j*4u<=size-4u&&thunk-base+j*4u<=size-4u;j++){
+   uint32_t iat=base+ft+j*4u;
+   if(iat==slot){descriptor_match=1;uint32_t value=rd32(thunk+j*4u);
+    if(value&0x80000000u)x86_dll_init_copy_ordinal(value&0xFFFFu);
+    else if(value<size&&value+2u<size)x86_dll_init_copy_guest_string(x86_dll_init_fail_import_func,sizeof(x86_dll_init_fail_import_func),base+value+2u,127u);
+    return;
+   }
+   if(rd32(thunk+j*4u)==0u)break;
+  }
+  if(descriptor_match)return;
+  x86_dll_init_fail_import_dll[0]=0;
+ }
+}
 static uint32_t x86_dll_tls_next_index=1u;
 static int x86_dll_cname_equal(const char*a,const char*b){uint32_t i=0;if(!a||!b)return 0;while(a[i]&&b[i]){char x=a[i],y=b[i];if(x>='A'&&x<='Z')x=(char)(x-'A'+'a');if(y>='A'&&y<='Z')y=(char)(y-'A'+'a');if(x!=y)return 0;i++;}return a[i]==0&&b[i]==0;}
 static int x86_dll_name_equal(uint32_t p,const char*n){uint32_t i=0;if(!p||!n)return 0;while(n[i]){char a=(char)MEM8(p+i),b=n[i];if(a>='A'&&a<='Z')a=(char)(a-'A'+'a');if(b>='A'&&b<='Z')b=(char)(b-'A'+'a');if(a!=b)return 0;i++;}return MEM8(p+i)==0;}
@@ -3781,7 +3836,7 @@ static int x86_dll_invoke_init_target(uint32_t target,uint32_t a0,uint32_t a1,ui
   if(rc<0)break;
   if(cpu_error>=0xE100u)break;
  }
- uint32_t value=regs[R_EAX],fail_ip=eip,fail_error=cpu_error;
+ uint32_t value=regs[R_EAX],fail_ip=eip,fail_error=cpu_error,fail_control_target=x86_control_fault_target,fail_control_slot=x86_control_fault_slot;
  if(!returned&&!fail_error)fail_error=0xD11Au; /* initializer exceeded its bounded step budget */
  if(return_value)*return_value=value;
  for(uint32_t i=0;i<8u;i++)regs[i]=saved_regs[i];
@@ -3791,6 +3846,8 @@ static int x86_dll_invoke_init_target(uint32_t target,uint32_t a0,uint32_t a1,ui
  x86_trace_reset();x86_profile_clear();espw_prev=0;
  if(!returned||fail_error||(require_true&&value==0u)){
   x86_dll_init_fail_target=target;x86_dll_init_fail_eip=fail_ip;x86_dll_init_fail_error=fail_error?fail_error:0xD11Du;
+  if(fail_error==0xFF20u&&fail_control_target>=API_UNRESOLVED_BASE&&fail_control_target<API_UNRESOLVED_END)
+   x86_dll_init_capture_import_for_slot(fail_control_slot);
   x86_control_fault_kind=saved_control_kind;x86_control_fault_eip=saved_control_eip;
   x86_control_fault_next_eip=saved_control_next;x86_control_fault_target=saved_control_target;x86_control_fault_slot=saved_control_slot;
   return 0;
@@ -3939,6 +3996,8 @@ __attribute__((export_name("x86_dll_get_init_fail_name_byte"))) uint32_t x86_dll
  if(j>=sizeof(x86_dll_modules[0].requested_name)||x86_dll_init_fail_module>=X86_DLL_MAX_MODULES)return 0u;
  return (uint8_t)x86_dll_modules[x86_dll_init_fail_module].requested_name[j];
 }
+__attribute__((export_name("x86_dll_get_init_fail_import_dll_byte"))) uint32_t x86_dll_get_init_fail_import_dll_byte(uint32_t j){return j<sizeof(x86_dll_init_fail_import_dll)?(uint8_t)x86_dll_init_fail_import_dll[j]:0u;}
+__attribute__((export_name("x86_dll_get_init_fail_import_func_byte"))) uint32_t x86_dll_get_init_fail_import_func_byte(uint32_t j){return j<sizeof(x86_dll_init_fail_import_func)?(uint8_t)x86_dll_init_fail_import_func[j]:0u;}
 
 __attribute__((export_name("x86_dll_get_entry"))) uint32_t x86_dll_get_entry(uint32_t index){uint32_t n=0;for(uint32_t i=0;i<X86_DLL_MAX_MODULES;i++)if(x86_dll_modules[i].active){if(n++==index)return x86_dll_modules[i].base+x86_dll_modules[i].entry;}return 0;}
 __attribute__((export_name("x86_dll_get_import_failed"))) uint32_t x86_dll_get_import_failed(uint32_t index){uint32_t n=0;for(uint32_t i=0;i<X86_DLL_MAX_MODULES;i++)if(x86_dll_modules[i].active){if(n++==index)return x86_dll_modules[i].imports_failed;}return 0;}
