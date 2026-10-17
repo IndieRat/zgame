@@ -114,7 +114,7 @@ function findZdllEntries(manifest) {
 
   function normalizeLibraryName(value) {
     return String(value || "").replace(/\\/g, "/").split("/").pop()
-      .replace(/\\.(?:zdll|dll|wasm)$/i, "").toLowerCase();
+      .replace(/\.(?:zdll|dll|wasm)$/i, "").toLowerCase();
   }
 
   function findXapiEntries(manifest) {
