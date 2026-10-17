@@ -99,4 +99,7 @@ assert.match(loader, /formatTrace\(ex, 64\)/,
 assert.match(loader, /dumpPeBytes\("call-chain-.*-callee"/,
   "crash diagnostics must dump bytes at caller/callee addresses when they map to PE images");
 
+assert.match(loader, /trace-section\[/,
+  "recent instruction history must report PE section transitions near the failure");
+
 console.log("API loading contract tests passed");
