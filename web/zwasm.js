@@ -499,6 +499,20 @@ class GuestRuntime {
 
     const unresolved = ex.x86_dll_rebind_imports();
     log("import rebind completed: unresolved=" + unresolved);
+    if (ex.x86_dll_get_import_failed && ex.x86_dll_get_name_byte) {
+      const moduleCount = ex.x86_dll_get_count?.() ?? 0;
+      for (let i = 0; i < moduleCount; i++) {
+        const failed = ex.x86_dll_get_import_failed(i) >>> 0;
+        if (!failed) continue;
+        let name = "";
+        for (let j = 0; j < 96; j++) {
+          const ch = ex.x86_dll_get_name_byte(i, j);
+          if (!ch) break;
+          name += String.fromCharCode(ch);
+        }
+        log("native DLL imports unresolved: " + (name || ("module[" + i + "]")) + " · " + failed);
+      }
+    }
     this.reportUnresolved();
 
     log("imports: " + ex.x86_get_import_resolved() + "/" + ex.x86_get_import_count() + " resolved, " + ex.x86_get_import_failed() + " failed · xapi functions: " + ex.x86_get_xapi_count());
@@ -526,7 +540,9 @@ class GuestRuntime {
         this.diagnostics("native DLL initialization failed");
         return;
       }
-      log("native DLL initialization completed: " + initResult + " modules; TLS callbacks and entrypoints processed");
+      const skipped = ex.x86_dll_get_init_skipped_count?.() ?? 0;
+      log("native DLL initialization completed: " + initResult + " initialized, " + skipped +
+          " skipped because their imported APIs are unresolved; TLS callbacks and entrypoints processed for eligible modules");
     }
     this.running = true; $("#runtimeState").textContent = "RUNNING"; setStatus("Running");
     log("x86 runtime online; image base=0x" + (ex.x86_get_image_base?.() ?? 0).toString(16));
