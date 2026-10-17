@@ -219,25 +219,40 @@ function findZdllEntries(manifest) {
 
   /* Compare the mapped image in guest memory with the PE file it was loaded from.
    * Returns human-readable lines: one per section (ok / mismatch with first differing RVA). */
-  function verifyImage(memBuffer, pe, imageBase) {
+  function verifyImage(memBuffer, pe, imageBase, ex) {
     const dv = new DataView(pe.buffer, pe.byteOffset, pe.byteLength);
     const mem = new Uint8Array(memBuffer);
     const out = [];
     const peOff = dv.getUint32(0x3c, true);
     const nsec = dv.getUint16(peOff + 6, true), optsz = dv.getUint16(peOff + 20, true);
     const entryRva = dv.getUint32(peOff + 24 + 16, true);
+    // Import Address Table slots are intentionally rewritten during PE loading.
+    // Exclude those bytes from the raw-image comparison so expected API binding
+    // differences do not masquerade as section copy/relocation corruption.
+    const dynamicIatBytes = new Set();
+    if (ex && typeof ex.x86_get_gdr_count === "function" &&
+        typeof ex.x86_get_gdr_iat_rva === "function") {
+      const count = Math.min(ex.x86_get_gdr_count() >>> 0, 65536);
+      for (let i = 0; i < count; i++) {
+        const rva = ex.x86_get_gdr_iat_rva(i) >>> 0;
+        if (!rva) continue;
+        for (let byte = 0; byte < 4; byte++) dynamicIatBytes.add(rva + byte);
+      }
+    }
     let sh = peOff + 24 + optsz;
     for (let i = 0; i < nsec; i++, sh += 40) {
       let name = ""; for (let j = 0; j < 8 && pe[sh + j]; j++) name += String.fromCharCode(pe[sh + j]);
       const va = dv.getUint32(sh + 12, true), raw = dv.getUint32(sh + 20, true), rawsz = dv.getUint32(sh + 16, true);
-      let bad = -1, zeroRun = 0;
+      let bad = -1;
       for (let k = 0; k < rawsz; k++) {
+        if (dynamicIatBytes.has(va + k)) continue;
         if (mem[imageBase + va + k] !== pe[raw + k]) { bad = k; break; }
       }
       const hasEntry = entryRva >= va && entryRva < va + rawsz;
       out.push("section " + name.padEnd(8) + " rva=0x" + va.toString(16) + " raw=" + rawsz + (hasEntry ? " [entry]" : "") +
         (bad < 0 ? " ok" : " MISMATCH at rva 0x" + (va + bad).toString(16) + " (mem=" + mem[imageBase + va + bad].toString(16) + " file=" + pe[raw + bad].toString(16) + ")"));
     }
+    if (dynamicIatBytes.size) out.push("ignored " + (dynamicIatBytes.size / 4) + " bound IAT slots in raw-image comparison");
     return out;
   }
 
