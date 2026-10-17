@@ -188,13 +188,6 @@ async function loadZDLL(reader, entry, hostApi) {
   log("zdll verified: " + entry.path + " · SHA-256 ok · ABI " + decoded.manifest.abi);
   return new ZDLLModule(entry, decoded.manifest, instance);
 }
-    log(
-        "skipping legacy wasm zdll loader: " +
-        entry.path
-    );
-
-    return null;
-}
 
 class GuestRuntime {
   constructor(reader, module) {
