@@ -83,4 +83,13 @@ assert.match(rebind, /if\(loaded\)scan_imports\(\)/,
 assert.match(rebind, /x86_dll_resolve_imports\(m->base,m->size,m->import_rva,m->import_size,&ok,&bad\)/,
   "rebind should revisit loaded DLL dependency imports");
 
+assert.match(runtime, /x86_pe_section_header_for_address/,
+  "x86 crash diagnostics must map addresses back to loaded PE sections");
+assert.match(runtime, /x86_dll_get_name_byte/,
+  "x86 diagnostics must identify the requested filename of a loaded DLL");
+assert.match(loader, /describeAddress\("fault-eip"/,
+  "x86 faults must report the PE image/DLL section containing the failing EIP");
+assert.match(loader, /describeAddress\("control-target"/,
+  "indirect control-flow diagnostics must identify the target module and PE section");
+
 console.log("API loading contract tests passed");
