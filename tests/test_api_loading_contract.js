@@ -113,4 +113,11 @@ assert.match(loader, /x86_dll_initialize_all\(\)/,
 assert.ok(loader.indexOf("x86_dll_initialize_all()") < loader.indexOf('this.running = true'),
   "native DLL initializers must run before the guest executable begins");
 
+assert.match(runtime, /if\(m->imports_failed\)\s*\{\s*m->init_state=4u;\s*x86_dll_init_skipped_count\+\+;/,
+  "native DLL initializers must not run with unresolved imports still pointing at trap addresses");
+assert.match(runtime, /export_name\("x86_dll_get_init_skipped_count"\)/,
+  "the runtime must report native DLLs skipped because required imports are unresolved");
+assert.match(loader, /native DLL imports unresolved:/,
+  "the shell must report per-DLL unresolved imports before initialization");
+
 console.log("API loading contract tests passed");
