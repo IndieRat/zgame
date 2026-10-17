@@ -102,4 +102,15 @@ assert.match(loader, /dumpPeBytes\("call-chain-.*-callee"/,
 assert.match(loader, /trace-section\[/,
   "recent instruction history must report PE section transitions near the failure");
 
+assert.match(runtime, /tls_rva,tls_size,tls_index,tls_block/,
+  "native DLL images must preserve TLS directory and per-module storage metadata");
+assert.match(runtime, /export_name\("x86_dll_initialize_all"\)/,
+  "the runtime must expose native DLL process-attach initialization");
+assert.match(runtime, /export_name\("x86_dll_get_init_fail_eip"\)/,
+  "DLL initializer faults must identify the instruction address that failed");
+assert.match(loader, /x86_dll_initialize_all\(\)/,
+  "the browser must initialize mapped DLLs after import rebinding and before game execution");
+assert.ok(loader.indexOf("x86_dll_initialize_all()") < loader.indexOf('this.running = true'),
+  "native DLL initializers must run before the guest executable begins");
+
 console.log("API loading contract tests passed");
