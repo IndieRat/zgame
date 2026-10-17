@@ -3925,6 +3925,10 @@ __attribute__((export_name("x86_dll_get_init_fail_stage"))) uint32_t x86_dll_get
 __attribute__((export_name("x86_dll_get_init_fail_target"))) uint32_t x86_dll_get_init_fail_target(void){return x86_dll_init_fail_target;}
 __attribute__((export_name("x86_dll_get_init_fail_eip"))) uint32_t x86_dll_get_init_fail_eip(void){return x86_dll_init_fail_eip;}
 __attribute__((export_name("x86_dll_get_init_fail_error"))) uint32_t x86_dll_get_init_fail_error(void){return x86_dll_init_fail_error;}
+__attribute__((export_name("x86_dll_get_init_fail_name_byte"))) uint32_t x86_dll_get_init_fail_name_byte(uint32_t j){
+ if(j>=sizeof(x86_dll_modules[0].requested_name)||x86_dll_init_fail_module>=X86_DLL_MAX_MODULES)return 0u;
+ return (uint8_t)x86_dll_modules[x86_dll_init_fail_module].requested_name[j];
+}
 
 __attribute__((export_name("x86_dll_get_entry"))) uint32_t x86_dll_get_entry(uint32_t index){uint32_t n=0;for(uint32_t i=0;i<X86_DLL_MAX_MODULES;i++)if(x86_dll_modules[i].active){if(n++==index)return x86_dll_modules[i].base+x86_dll_modules[i].entry;}return 0;}
 __attribute__((export_name("x86_dll_get_import_failed"))) uint32_t x86_dll_get_import_failed(uint32_t index){uint32_t n=0;for(uint32_t i=0;i<X86_DLL_MAX_MODULES;i++)if(x86_dll_modules[i].active){if(n++==index)return x86_dll_modules[i].imports_failed;}return 0;}
