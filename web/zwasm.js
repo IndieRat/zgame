@@ -606,7 +606,7 @@ class GuestRuntime {
       log("diag: FIRST-FAULT operand address=" + hex(ex.x86_get_first_fault_address()) + " size=" + ex.x86_get_first_fault_size() + " kind=" + ex.x86_get_first_fault_kind() + " segmentBase=" + hex(ex.x86_get_first_fault_segment_base()) + " EFLAGS=" + hex(ex.x86_get_first_fault_eflags()));
       log("diag: FIRST-FAULT GPR " + regNames.map((n,i)=>n+"="+hex(ex.x86_get_first_fault_reg(i))).join(" "));
     }
-    for (const line of ZWASMHost.formatTrace(ex, 16)) log("diag: " + line);
+    for (const line of ZWASMHost.formatTrace(ex, 64)) log("diag: " + line);
     for (const line of ZWASMHost.formatApiLog(ex, 40)) log("diag: " + line);
     if (ex.x86_get_shadow_stat) {
       const st = (n) => ex.x86_get_shadow_stat(n);
@@ -617,7 +617,35 @@ class GuestRuntime {
         log("diag: " + label + " ret@" + hex(f(0)) + " -> " + hex(f(1)) + " esp=" + hex(f(2)) + (kind < 2 ? " expected=" + hex(f(3)) : "") + " callee=" + hex(f(4)) + " callsite=" + hex(f(5)) + " step=" + f(6) + " depth=" + f(7));
       };
       ev(0, "first unbalanced ret"); ev(2, "first unmatched ret"); ev(3, "last unmatched ret");
-      for (let n = Math.max(0, st(0) - 12); n < st(0); n++) log("diag: call chain[" + n + "] callee=" + hex(ex.x86_get_shadow_frame(n, 0)) + " from=" + hex(ex.x86_get_shadow_frame(n, 1)));
+      const dumpPeBytes = (label, address, length) => {
+        address >>>= 0;
+        let mapped = false;
+        const imageBase = ex.x86_get_image_base?.() >>> 0;
+        const imageSize = ex.x86_get_image_size?.() >>> 0;
+        if (address >= imageBase && address - imageBase < imageSize) mapped = true;
+        const moduleCount = ex.x86_dll_get_count?.() ?? 0;
+        for (let i = 0; !mapped && i < moduleCount; i++) {
+          const b = ex.x86_dll_get_base?.(i) >>> 0;
+          const z = ex.x86_dll_get_size?.(i) >>> 0;
+          if (address >= b && address - b < z) mapped = true;
+        }
+        if (!mapped || typeof ex.x86_guest_read8 !== "function") return;
+        let bytes = "";
+        for (let i = 0; i < length; i++) {
+          const b = ex.x86_guest_read8(address + i) & 255;
+          bytes += (i ? " " : "") + b.toString(16).padStart(2, "0");
+        }
+        log("diag: code-bytes " + label + "@" + hex(address) + " " + bytes);
+      };
+      for (let n = Math.max(0, st(0) - 12); n < st(0); n++) {
+        const callee = ex.x86_get_shadow_frame(n, 0) >>> 0;
+        const site = ex.x86_get_shadow_frame(n, 1) >>> 0;
+        log("diag: call chain[" + n + "] callee=" + hex(callee) + " from=" + hex(site));
+        describeAddress("call-chain-" + n + "-callee", callee);
+        describeAddress("call-chain-" + n + "-site", site);
+        dumpPeBytes("call-chain-" + n + "-callee", callee, 16);
+        dumpPeBytes("call-chain-" + n + "-site", site, 12);
+      }
       for (let k = 0; k < Math.min(st(6), 4); k++) {
         log("diag: ESP jump #" + k + " at eip=" + hex(ex.x86_get_espw_event(k, 0)) + " esp " + hex(ex.x86_get_espw_event(k, 1)) + " -> " + hex(ex.x86_get_espw_event(k, 2)) + " step=" + ex.x86_get_espw_event(k, 4));
         for (let n = 0; n < 24; n++) { const e = ex.x86_get_espw_snap(k, n, 0); if (e) log("diag:   " + hex(e) + " op=" + hex(ex.x86_get_espw_snap(k, n, 1)) + " esp=" + hex(ex.x86_get_espw_snap(k, n, 2)) + " ebp=" + hex(ex.x86_get_espw_snap(k, n, 3))); }
