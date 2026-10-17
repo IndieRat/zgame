@@ -531,6 +531,52 @@ class GuestRuntime {
     this.diagShown = true;
     const ex = this.instance.exports, hex = (v) => "0x" + (v >>> 0).toString(16);
     log("diag: " + reason + " eip=" + hex(ex.x86_get_eip()) + " steps=" + ex.x86_get_steps() + " cpu_error=" + hex(ex.x86_get_cpu_error()) + " halted=" + ex.x86_get_halted());
+    const describeAddress = (label, value) => {
+      const address = value >>> 0;
+      let base = ex.x86_get_image_base?.() >>> 0;
+      let size = ex.x86_get_image_size?.() >>> 0;
+      let name = "guest.pe";
+      if (!(address >= base && address - base < size)) {
+        base = 0; size = 0; name = "";
+        const count = ex.x86_dll_get_count?.() ?? 0;
+        for (let i = 0; i < count; i++) {
+          const b = ex.x86_dll_get_base?.(i) >>> 0;
+          const n = ex.x86_dll_get_size?.(i) >>> 0;
+          if (address >= b && address - b < n) {
+            base = b; size = n;
+            if (ex.x86_dll_get_name_byte) {
+              for (let j = 0; j < 96; j++) {
+                const ch = ex.x86_dll_get_name_byte(i, j);
+                if (!ch) break;
+                name += String.fromCharCode(ch);
+              }
+            }
+            if (!name) name = "dll[" + i + "]";
+            break;
+          }
+        }
+      }
+      if (!name) {
+        log("diag: address-map " + label + "=" + hex(address) + " is outside the main image and loaded DLL images");
+        return;
+      }
+      const rva = (address - base) >>> 0;
+      const secRva = ex.x86_get_section_info_for_address?.(address, 0) ?? 0xffffffff;
+      const secSize = ex.x86_get_section_info_for_address?.(address, 1) ?? 0xffffffff;
+      const secFlags = ex.x86_get_section_info_for_address?.(address, 2) ?? 0xffffffff;
+      let secName = "";
+      if (secRva !== 0xffffffff && ex.x86_get_section_name_byte_for_address) {
+        for (let j = 0; j < 8; j++) {
+          const ch = ex.x86_get_section_name_byte_for_address(address, j);
+          if (!ch) break;
+          secName += String.fromCharCode(ch);
+        }
+      }
+      log("diag: address-map " + label + "=" + hex(address) + " in " + name + "+" + hex(rva) +
+          " module-size=" + hex(size) + " section=" + (secName || "<no-section>") +
+          " section-rva=" + hex(secRva) + " section-span=" + hex(secSize) + " characteristics=" + hex(secFlags));
+    };
+    describeAddress("fault-eip", ex.x86_get_eip());
     if (ex.x86_get_control_fault_target && ex.x86_get_control_fault_slot) {
       const cfKind = ex.x86_get_control_fault_kind?.() ?? 0;
       const cfEip = ex.x86_get_control_fault_eip?.() ?? 0;
@@ -539,6 +585,8 @@ class GuestRuntime {
       const cfSlot = ex.x86_get_control_fault_slot();
       const unresolved = ex.x86_get_last_unresolved_gdr?.() ?? 0xffffffff;
       log("diag: control-transfer fault kind=" + cfKind + " eip=" + hex(cfEip) + " next=" + hex(cfNext) + " target=" + hex(cfTarget) + " slot=" + hex(cfSlot) + " last unresolved GDR=" + hex(unresolved));
+      describeAddress("control-source", cfEip);
+      describeAddress("control-target", cfTarget);
       if (ex.x86_get_gdr_count && ex.x86_get_gdr_dll_name_byte && ex.x86_get_gdr_func_name_byte && unresolved < ex.x86_get_gdr_count()) {
         const readGdrName = (fn, i) => { let s = ""; for (let j = 0; j < 255; j++) { const ch = ex[fn](i, j); if (!ch) break; s += String.fromCharCode(ch); } return s; };
         log("diag: control-transfer unresolved import " + readGdrName("x86_get_gdr_dll_name_byte", unresolved) + "!" + readGdrName("x86_get_gdr_func_name_byte", unresolved) + " IAT RVA=" + hex(ex.x86_get_gdr_iat_rva?.(unresolved) ?? 0) + " target=" + hex(ex.x86_get_gdr_target?.(unresolved) ?? 0));
