@@ -23,3 +23,4 @@ jobs:
       - run: node tests/test_zdll_loader.js
       - run: node tests/test_api_loading_contract.js
       - run: python -m py_compile packager/*.py tools/*.py
+      - run: clang --target=wasm32 -O2 -nostdlib -Wl,--no-entry -Wl,--export-memory -Wl,--export-table -Wl,--allow-undefined -o /tmp/zw_runtime.wasm runtime/x86/runtime.c
