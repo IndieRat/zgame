@@ -607,6 +607,48 @@ class GuestRuntime {
       log("diag: FIRST-FAULT GPR " + regNames.map((n,i)=>n+"="+hex(ex.x86_get_first_fault_reg(i))).join(" "));
     }
     for (const line of ZWASMHost.formatTrace(ex, 64)) log("diag: " + line);
+    if (ex.x86_get_trace_count && ex.x86_get_trace_index && ex.x86_get_trace_eip &&
+        ex.x86_get_section_info_for_address && ex.x86_get_section_name_byte_for_address) {
+      const traceCount = ex.x86_get_trace_count();
+      const first = Math.max(0, traceCount - 64);
+      let priorSection = "";
+      for (let ti = first; ti < traceCount; ti++) {
+        const idx = ex.x86_get_trace_index(ti);
+        const address = ex.x86_get_trace_eip(idx) >>> 0;
+        const sectionRva = ex.x86_get_section_info_for_address(address, 0) >>> 0;
+        if (sectionRva === 0xffffffff) { priorSection = "unmapped"; continue; }
+        let sectionName = "";
+        for (let j = 0; j < 8; j++) {
+          const ch = ex.x86_get_section_name_byte_for_address(address, j);
+          if (!ch) break;
+          sectionName += String.fromCharCode(ch);
+        }
+        let moduleName = "guest.pe";
+        const imageBase = ex.x86_get_image_base?.() >>> 0;
+        const imageSize = ex.x86_get_image_size?.() >>> 0;
+        if (!(address >= imageBase && address - imageBase < imageSize)) {
+          moduleName = "unknown-module";
+          const moduleCount = ex.x86_dll_get_count?.() ?? 0;
+          for (let mi = 0; mi < moduleCount; mi++) {
+            const base = ex.x86_dll_get_base?.(mi) >>> 0;
+            const size = ex.x86_dll_get_size?.(mi) >>> 0;
+            if (address >= base && address - base < size) {
+              moduleName = "";
+              for (let j = 0; j < 96; j++) {
+                const ch = ex.x86_dll_get_name_byte?.(mi, j) ?? 0;
+                if (!ch) break;
+                moduleName += String.fromCharCode(ch);
+              }
+              if (!moduleName) moduleName = "dll[" + mi + "]";
+              break;
+            }
+          }
+        }
+        const key = moduleName + ":" + sectionName + ":" + sectionRva.toString(16);
+        if (key !== priorSection) describeAddress("trace-section[" + (ti - traceCount) + "]", address);
+        priorSection = key;
+      }
+    }
     for (const line of ZWASMHost.formatApiLog(ex, 40)) log("diag: " + line);
     if (ex.x86_get_shadow_stat) {
       const st = (n) => ex.x86_get_shadow_stat(n);
