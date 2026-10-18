@@ -592,6 +592,15 @@ class GuestRuntime {
         if (failedImportDll || failedImportFunc) {
           log("native DLL initializer trapped on unresolved import: " + (failedImportDll || "?") + "!" + (failedImportFunc || "?"));
         }
+        const getprocFailCount = ex.x86_getproc_fail_count?.() >>> 0;
+        if (getprocFailCount) {
+          const failedGetprocDll = readInitFailText("x86_getproc_fail_dll_byte");
+          const failedGetprocFunc = readInitFailText("x86_getproc_fail_func_byte");
+          log("native DLL GetProcAddress lookup failed: " + (failedGetprocDll || "?") + "!" +
+              (failedGetprocFunc || "?") + " module-handle=" +
+              hex(ex.x86_getproc_fail_module?.() ?? 0) + " name-pointer=" +
+              hex(ex.x86_getproc_fail_name?.() ?? 0) + " recorded-failures=" + getprocFailCount);
+        }
         log("native DLL initialization FAILED module=" + (moduleName || "<executable>") +
             " stage=" + stageName + " target=" + hex(ex.x86_dll_get_init_fail_target?.() ?? 0) +
             " eip=" + hex(ex.x86_dll_get_init_fail_eip?.() ?? 0) +
