@@ -120,6 +120,14 @@ assert.match(runtime, /export_name\("x86_dll_get_init_fail_steps"\)/,
   "DLL initializer timeout diagnostics must report executed instruction count");
 assert.match(runtime, /export_name\("x86_dll_get_init_sample_eip"\)/,
   "DLL initializer timeout diagnostics must expose periodic instruction addresses");
+assert.match(runtime, /export_name\("x86_dll_resume_init_target"\)/,
+  "a timed-out packed DLL initializer must be resumable without restarting its CPU state");
+assert.match(runtime, /x86_dll_init_all_started/,
+  "retrying DLL initialization after a resumed entrypoint must preserve already-completed module state");
+assert.match(loader, /await new Promise\(\(resolve\) => setTimeout\(resolve, 0\)\)/,
+  "long native DLL initialization must yield between instruction batches");
+assert.match(loader, /maxInitSteps = 30000000/,
+  "resumed native DLL initialization must have a total instruction cap");
 assert.match(loader, /EIP samples every 250000 instructions/,
   "native DLL initializer failures must log progress samples to distinguish loops from long startup paths");
 assert.match(loader, /x86_dll_initialize_all\(\)/,
