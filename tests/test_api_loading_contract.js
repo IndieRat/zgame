@@ -116,6 +116,12 @@ assert.match(runtime, /export_name\("x86_dll_initialize_all"\)/,
   "the runtime must expose native DLL process-attach initialization");
 assert.match(runtime, /export_name\("x86_dll_get_init_fail_eip"\)/,
   "DLL initializer faults must identify the instruction address that failed");
+assert.match(runtime, /export_name\("x86_dll_get_init_fail_steps"\)/,
+  "DLL initializer timeout diagnostics must report executed instruction count");
+assert.match(runtime, /export_name\("x86_dll_get_init_sample_eip"\)/,
+  "DLL initializer timeout diagnostics must expose periodic instruction addresses");
+assert.match(loader, /EIP samples every 250000 instructions/,
+  "native DLL initializer failures must log progress samples to distinguish loops from long startup paths");
 assert.match(loader, /x86_dll_initialize_all\(\)/,
   "the browser must initialize mapped DLLs after import rebinding and before game execution");
 assert.ok(loader.indexOf("x86_dll_initialize_all()") < loader.indexOf('this.running = true'),
