@@ -45,6 +45,14 @@ assert.match(batch, /--work-dir/,
 assert.match(runtime, /import_rva,import_size/,
   "loaded DLL records must preserve their import directory");
 
+const imm8GroupStart = runtime.indexOf("case 0x83: {");
+const imm8GroupEnd = runtime.indexOf("case 0x39:", imm8GroupStart);
+assert.ok(imm8GroupStart >= 0 && imm8GroupEnd > imm8GroupStart,
+  "the x86 immediate-byte arithmetic group must be present");
+assert.match(runtime.slice(imm8GroupStart, imm8GroupEnd),
+  /else if\(sub==6\)\{v=a\^b;set_logic_flags\(v\);\}/,
+  "opcode 83 /6 must implement XOR r/m32, imm8 for native DLL startup");
+
 assert.match(runtime, /#define X86_MEM_REGION_MAX 4096u/,
   "guest memory-region metadata must not exhaust during CRT startup allocations");
 assert.match(runtime, /X\(_callnewh,1,0\)/,
