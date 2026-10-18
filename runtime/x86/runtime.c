@@ -3401,7 +3401,7 @@ static uint32_t x86_dll_last_error=0,x86_dll_last_base=0;
  * client API uses WUS0/WUS1 sections). Windows runs TLS callbacks and DllMain
  * before an imported function is callable; the guest loader must do likewise. */
 #define X86_DLL_INIT_SENTINEL 0xF00DD11Au
-#define X86_DLL_INIT_STEP_LIMIT 5000000u
+#define X86_DLL_INIT_STEP_LIMIT 250000u /* one UI-friendly initialization slice */
 #define X86_DLL_INIT_SAMPLE_SPAN 250000u
 #define X86_DLL_INIT_SAMPLE_COUNT 20u
 static uint32_t x86_dll_init_count=0,x86_dll_init_skipped_count=0;
