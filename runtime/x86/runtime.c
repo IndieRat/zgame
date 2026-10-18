@@ -3402,7 +3402,11 @@ static uint32_t x86_dll_last_error=0,x86_dll_last_base=0;
  * before an imported function is callable; the guest loader must do likewise. */
 #define X86_DLL_INIT_SENTINEL 0xF00DD11Au
 #define X86_DLL_INIT_STEP_LIMIT 5000000u
+#define X86_DLL_INIT_SAMPLE_SPAN 250000u
+#define X86_DLL_INIT_SAMPLE_COUNT 20u
 static uint32_t x86_dll_init_count=0,x86_dll_init_skipped_count=0;
+static uint32_t x86_dll_init_fail_steps=0,x86_dll_init_sample_count=0;
+static uint32_t x86_dll_init_samples[X86_DLL_INIT_SAMPLE_COUNT];
 static uint32_t x86_dll_init_fail_module=0xFFFFFFFFu;
 static uint32_t x86_dll_init_fail_stage=0;
 static uint32_t x86_dll_init_fail_target=0;
@@ -3813,6 +3817,8 @@ static int x86_dll_invoke_init_target(uint32_t target,uint32_t a0,uint32_t a1,ui
  uint32_t saved_control_kind=x86_control_fault_kind,saved_control_eip=x86_control_fault_eip;
  uint32_t saved_control_next=x86_control_fault_next_eip,saved_control_target=x86_control_fault_target,saved_control_slot=x86_control_fault_slot;
  if(return_value)*return_value=0;
+ x86_dll_init_fail_steps=0u;x86_dll_init_sample_count=0u;
+ for(uint32_t i=0;i<X86_DLL_INIT_SAMPLE_COUNT;i++)x86_dll_init_samples[i]=0u;
  if(!target||!x86_mem_region_find(target,1u,X86_MEM_EXEC)){
   x86_dll_init_fail_target=target;x86_dll_init_fail_eip=target;x86_dll_init_fail_error=0xD11B;
   return 0;
@@ -3828,22 +3834,26 @@ static int x86_dll_invoke_init_target(uint32_t target,uint32_t a0,uint32_t a1,ui
  regs[R_ESP]=sp;
  eflags=0x202u;decoded_prefixes=0u;decoded_operand16=0u;
  eip=target;halted=0u;cpu_error=0u;
- uint32_t returned=0u;
- for(uint32_t i=0;i<X86_DLL_INIT_STEP_LIMIT;i++){
+ /* Start a clean instruction history for this initializer. Keep it on failure. */
+ x86_trace_reset();x86_profile_clear();espw_prev=0u;
+ uint32_t returned=0u,init_steps=0u;
+ for(;init_steps<X86_DLL_INIT_STEP_LIMIT;){
   if(eip==X86_DLL_INIT_SENTINEL){returned=1u;break;}
   if(halted||cpu_error)break;
   int rc=cpu_step();
+  init_steps++;
+  if((init_steps%X86_DLL_INIT_SAMPLE_SPAN)==0u&&x86_dll_init_sample_count<X86_DLL_INIT_SAMPLE_COUNT)
+   x86_dll_init_samples[x86_dll_init_sample_count++]=eip;
   if(rc<0)break;
   if(cpu_error>=0xE100u)break;
  }
+ x86_dll_init_fail_steps=init_steps;
  uint32_t value=regs[R_EAX],fail_ip=eip,fail_error=cpu_error,fail_control_target=x86_control_fault_target,fail_control_slot=x86_control_fault_slot;
  if(!returned&&!fail_error)fail_error=0xD11Au; /* initializer exceeded its bounded step budget */
  if(return_value)*return_value=value;
  for(uint32_t i=0;i<8u;i++)regs[i]=saved_regs[i];
  eflags=saved_eflags;eip=saved_eip;halted=saved_halted;cpu_error=saved_error;steps=saved_steps;
  decoded_prefixes=(uint8_t)saved_prefixes;decoded_operand16=(uint8_t)saved_operand16;
- /* Bootstrap call/return traffic is not part of the game's call history. */
- x86_trace_reset();x86_profile_clear();espw_prev=0;
  if(!returned||fail_error||(require_true&&value==0u)){
   x86_dll_init_fail_target=target;x86_dll_init_fail_eip=fail_ip;x86_dll_init_fail_error=fail_error?fail_error:0xD11Du;
   if(fail_error==0xFF20u&&fail_control_target>=API_UNRESOLVED_BASE&&fail_control_target<API_UNRESOLVED_END)
@@ -3852,6 +3862,8 @@ static int x86_dll_invoke_init_target(uint32_t target,uint32_t a0,uint32_t a1,ui
   x86_control_fault_next_eip=saved_control_next;x86_control_fault_target=saved_control_target;x86_control_fault_slot=saved_control_slot;
   return 0;
  }
+ /* Successful bootstrap traffic should not pollute the game's first trace. */
+ x86_trace_reset();x86_profile_clear();espw_prev=0u;
  return 1;
 }
 static int x86_dll_prepare_tls(uint32_t index){
@@ -3994,6 +4006,9 @@ __attribute__((export_name("x86_dll_get_init_fail_stage"))) uint32_t x86_dll_get
 __attribute__((export_name("x86_dll_get_init_fail_target"))) uint32_t x86_dll_get_init_fail_target(void){return x86_dll_init_fail_target;}
 __attribute__((export_name("x86_dll_get_init_fail_eip"))) uint32_t x86_dll_get_init_fail_eip(void){return x86_dll_init_fail_eip;}
 __attribute__((export_name("x86_dll_get_init_fail_error"))) uint32_t x86_dll_get_init_fail_error(void){return x86_dll_init_fail_error;}
+__attribute__((export_name("x86_dll_get_init_fail_steps"))) uint32_t x86_dll_get_init_fail_steps(void){return x86_dll_init_fail_steps;}
+__attribute__((export_name("x86_dll_get_init_sample_count"))) uint32_t x86_dll_get_init_sample_count(void){return x86_dll_init_sample_count;}
+__attribute__((export_name("x86_dll_get_init_sample_eip"))) uint32_t x86_dll_get_init_sample_eip(uint32_t i){return i<x86_dll_init_sample_count?x86_dll_init_samples[i]:0u;}
 __attribute__((export_name("x86_dll_get_init_fail_name_byte"))) uint32_t x86_dll_get_init_fail_name_byte(uint32_t j){
  if(j>=sizeof(x86_dll_modules[0].requested_name)||x86_dll_init_fail_module>=X86_DLL_MAX_MODULES)return 0u;
  return (uint8_t)x86_dll_modules[x86_dll_init_fail_module].requested_name[j];
