@@ -144,6 +144,12 @@ assert.match(loader, /native DLL imports unresolved:/,
 
 assert.match(runtime, /x86_dll_init_capture_import_for_slot/,
   "native DLL initialization faults must trace unresolved IAT slots back to DLL and function names");
+assert.match(runtime, /export_name\("x86_getproc_fail_dll_byte"\)/,
+  "failed runtime GetProcAddress calls must preserve the requested module name");
+assert.match(runtime, /export_name\("x86_getproc_fail_func_byte"\)/,
+  "failed runtime GetProcAddress calls must preserve the requested export name");
+assert.match(loader, /native DLL GetProcAddress lookup failed:/,
+  "a DLL that returns FALSE after dynamic resolution must report the missing exported function");
 assert.match(runtime, /!x86_dll_cname_equal\(m->requested_name,"steam_api\.dll"\)/,
   "the packed Steam API DLL must still be offered initialization when its imports are partially unresolved");
 assert.match(loader, /native DLL initializer trapped on unresolved import:/,
