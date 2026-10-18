@@ -544,6 +544,14 @@ class GuestRuntime {
         };
         const failedImportDll = readInitFailText("x86_dll_get_init_fail_import_dll_byte");
         const failedImportFunc = readInitFailText("x86_dll_get_init_fail_import_func_byte");
+        const initSteps = ex.x86_dll_get_init_fail_steps?.() >>> 0;
+        const initSampleCount = Math.min(20, ex.x86_dll_get_init_sample_count?.() >>> 0);
+        if (initSteps) {
+          const samples = [];
+          for (let i = 0; i < initSampleCount; i++) samples.push(hex(ex.x86_dll_get_init_sample_eip(i)));
+          log("native DLL initializer progress: " + initSteps + " guest instructions; EIP samples every 250000 instructions" +
+              (samples.length ? " · " + samples.join(" -> ") : " · no interval samples"));
+        }
         if (failedImportDll || failedImportFunc) {
           log("native DLL initializer trapped on unresolved import: " + (failedImportDll || "?") + "!" + (failedImportFunc || "?"));
         }
