@@ -519,7 +519,44 @@ class GuestRuntime {
 
     this.verifyImage("before run");
     if (typeof ex.x86_dll_initialize_all === "function") {
-      const initResult = ex.x86_dll_initialize_all() | 0;
+      let initResult = ex.x86_dll_initialize_all() | 0;
+      /* Packed DLL entrypoints can spend millions of instructions unpacking
+       * themselves. Resume the exact CPU state in short chunks so the browser
+       * gets a task turn between slices instead of blocking for the whole cap. */
+      let resumeRounds = 0;
+      while (initResult < 0 &&
+             (ex.x86_dll_get_init_fail_error?.() >>> 0) === 0xD11A &&
+             typeof ex.x86_dll_resume_init_target === "function" &&
+             resumeRounds < 4) {
+        resumeRounds++;
+        const maxInitSteps = 30000000;
+        let initSteps = ex.x86_dll_get_init_fail_steps?.() >>> 0;
+        let lastProgress = initSteps;
+        log("native DLL initializer exceeded its first instruction slice; continuing in yielding batches");
+        while (initSteps < maxInitSteps) {
+          const resumeStatus = ex.x86_dll_resume_init_target(250000) | 0;
+          initSteps = ex.x86_dll_get_init_fail_steps?.() >>> 0;
+          if (resumeStatus > 0) {
+            log("native DLL initializer returned after " + initSteps + " guest instructions; continuing module initialization");
+            initResult = ex.x86_dll_initialize_all() | 0;
+            break;
+          }
+          if (resumeStatus < 0) break;
+          if (initSteps - lastProgress >= 1000000) {
+            const at = "0x" + (ex.x86_dll_get_init_fail_eip?.() >>> 0).toString(16);
+            log("native DLL initializer progress: " + initSteps + " guest instructions · EIP=" + at);
+            lastProgress = initSteps;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+        if (initResult < 0 &&
+            (ex.x86_dll_get_init_fail_error?.() >>> 0) === 0xD11A &&
+            initSteps >= maxInitSteps) {
+          log("native DLL initializer did not return within " + maxInitSteps +
+              " guest instructions; preserving final instruction trace for diagnosis");
+          break;
+        }
+      }
       if (initResult < 0) {
         const hex = (v) => "0x" + (v >>> 0).toString(16);
         let moduleName = "";
