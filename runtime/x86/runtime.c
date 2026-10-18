@@ -3697,6 +3697,7 @@ static int load_pe(uint32_t f,uint32_t sz){
  crt_last_termination_return_eip=0u;crt_last_termination_target=0u;crt_last_termination_arg0=0u;
  crt_last_shim_index=0xFFFFFFFFu;crt_last_shim_caller=0u;crt_last_shim_target=0u;crt_last_shim_arg0=0u;crt_last_shim_argc=0u;crash_hit=0u;crash_return_eip=0u;crash_nframes=0u;crash_arg0=0u;
  x86_fs_base=X86_FS_TEB_BASE; x86_gs_base=X86_GS_TEB_BASE;
+ x86_fake_mod_count=0u;x86_getproc_failed_count=0u;x86_getproc_failed_module=0u;x86_getproc_failed_name=0u;x86_getproc_fail_dll[0]=0;x86_getproc_fail_func[0]=0;
  requested_image_base=0;reloc_rva=reloc_size=import_rva=import_size=0;relocation_needed=0;dll_count=import_count=0;import_resolved=import_failed=0;last_import_dll=last_import_func=last_import_thunk=last_import_target=0;last_failed_import_dll=last_failed_import_func=0;x86_gdr_reset();last_unresolved_gdr=0xFFFFFFFFu;mouse_clicks=0;mouse_right_clicks=0;mouse_middle_clicks=0;mouse_moves=0;surface_width=640;surface_height=360;
  if(sz<0x40u){load_error=1;return-1;} if(rd16(f)!=0x5a4du){load_error=2;return-1;}
  uint32_t pe=rd32(f+0x3cu); if(pe>sz-4u){load_error=3;return-2;} if(pe+24u>sz){load_error=4;return-2;}
