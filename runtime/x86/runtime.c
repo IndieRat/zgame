@@ -1125,7 +1125,7 @@ static char x86_modname_buf[272];
  * frequently probes optional Win32 exports and then returns FALSE if a
  * required one is absent; retain the exact name for shell diagnostics. */
 static char x86_getproc_fail_dll[64],x86_getproc_fail_func[128];
-static uint32_t x86_getproc_fail_count=0,x86_getproc_fail_module=0,x86_getproc_fail_name=0;
+static uint32_t x86_getproc_failed_count=0,x86_getproc_failed_module=0,x86_getproc_failed_name=0;
 static void x86_getproc_copy_string(char *out,uint32_t cap,uint32_t address){
  if(!out||cap<1u)return;
  uint32_t i=0;
@@ -1141,7 +1141,7 @@ static void x86_getproc_copy_string(char *out,uint32_t cap,uint32_t address){
  out[i]=0;
 }
 static void x86_getproc_note_failure(uint32_t module,uint32_t name){
- x86_getproc_fail_count++;x86_getproc_fail_module=module;x86_getproc_fail_name=name;
+ x86_getproc_failed_count++;x86_getproc_failed_module=module;x86_getproc_failed_name=name;
  x86_getproc_fail_dll[0]=0;x86_getproc_fail_func[0]=0;
  if(module>=X86_FAKE_MOD_BASE&&module<X86_FAKE_MOD_BASE+X86_FAKE_MOD_MAX*X86_FAKE_MOD_STRIDE){
   uint32_t idx=(module-X86_FAKE_MOD_BASE)/X86_FAKE_MOD_STRIDE;
@@ -4120,9 +4120,9 @@ __attribute__((export_name("x86_dll_get_init_fail_stage"))) uint32_t x86_dll_get
 __attribute__((export_name("x86_dll_get_init_fail_target"))) uint32_t x86_dll_get_init_fail_target(void){return x86_dll_init_fail_target;}
 __attribute__((export_name("x86_dll_get_init_fail_eip"))) uint32_t x86_dll_get_init_fail_eip(void){return x86_dll_init_fail_eip;}
 __attribute__((export_name("x86_dll_get_init_fail_error"))) uint32_t x86_dll_get_init_fail_error(void){return x86_dll_init_fail_error;}
-__attribute__((export_name("x86_getproc_fail_count"))) uint32_t x86_getproc_fail_count(void){return x86_getproc_fail_count;}
-__attribute__((export_name("x86_getproc_fail_module"))) uint32_t x86_getproc_fail_module(void){return x86_getproc_fail_module;}
-__attribute__((export_name("x86_getproc_fail_name"))) uint32_t x86_getproc_fail_name(void){return x86_getproc_fail_name;}
+__attribute__((export_name("x86_getproc_fail_count"))) uint32_t x86_getproc_fail_count(void){return x86_getproc_failed_count;}
+__attribute__((export_name("x86_getproc_fail_module"))) uint32_t x86_getproc_fail_module(void){return x86_getproc_failed_module;}
+__attribute__((export_name("x86_getproc_fail_name"))) uint32_t x86_getproc_fail_name(void){return x86_getproc_failed_name;}
 __attribute__((export_name("x86_getproc_fail_dll_byte"))) uint32_t x86_getproc_fail_dll_byte(uint32_t j){return j<sizeof(x86_getproc_fail_dll)?(uint8_t)x86_getproc_fail_dll[j]:0u;}
 __attribute__((export_name("x86_getproc_fail_func_byte"))) uint32_t x86_getproc_fail_func_byte(uint32_t j){return j<sizeof(x86_getproc_fail_func)?(uint8_t)x86_getproc_fail_func[j]:0u;}
 __attribute__((export_name("x86_dll_get_init_fail_steps"))) uint32_t x86_dll_get_init_fail_steps(void){return x86_dll_init_fail_steps;}
